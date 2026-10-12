@@ -1,0 +1,20 @@
+{
+  "name": "ascii-portrait-studio",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Browser-based ASCII portrait studio with PNG and looping-video exports.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Ethannju/ascii-portrait.git"
+  },
+  "homepage": "https://github.com/Ethannju/ascii-portrait#readme",
+  "bugs": "https://github.com/Ethannju/ascii-portrait/issues",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "dev": "node scripts/serve.mjs",
+    "test": "node scripts/check.mjs"
+  }
+}

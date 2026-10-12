@@ -1,0 +1,14 @@
+.DS_Store
+node_modules/
+*.log
+
+# This public Studio does not need credentials or personal source photos.
+.env
+.env.*
+/private/
+/private-assets/
+/portraits/
+/package/
+portrait-preset.json
+portrait-preset.js
+*.zip

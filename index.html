@@ -1,0 +1,4056 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="color-scheme" content="dark" />
+  <meta name="description" content="Turn photos into animated ASCII portraits in your browser; export PNG or looping video." />
+  <title>ASCII Portrait Studio</title>
+  <link rel="icon" href="data:," />
+  <script>
+    const pageParams = new URLSearchParams(location.search);
+    if (pageParams.get('embed') === '1') {
+      document.documentElement.classList.add('embed-mode');
+    }
+    if (pageParams.get('transparent') === '1') {
+      document.documentElement.classList.add('transparent-mode');
+    }
+  </script>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #020302;
+      --ink: #efffdf;
+      --muted: rgba(239, 255, 223, 0.54);
+      --faint: rgba(239, 255, 223, 0.32);
+      --line: rgba(239, 255, 223, 0.14);
+      --line-strong: rgba(239, 255, 223, 0.27);
+      --panel: rgba(7, 10, 7, 0.84);
+      --panel-solid: #090d09;
+      --field: rgba(239, 255, 223, 0.055);
+      --field-hover: rgba(185, 255, 125, 0.1);
+      --accent: #c6ff91;
+      --accent-dark: #101a0b;
+      --panel-width: 364px;
+      --workspace-rail: 400px;
+    }
+
+    * { box-sizing: border-box; }
+
+    .sr-only {
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      padding: 0;
+      margin: -1px;
+      overflow: hidden;
+      clip: rect(0, 0, 0, 0);
+      white-space: nowrap;
+      border: 0;
+    }
+
+    html, body {
+      width: 100%;
+      min-height: 100%;
+      margin: 0;
+      background: var(--bg);
+      color: var(--ink);
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+      overflow: hidden;
+    }
+
+    body::before {
+      content: "";
+      position: fixed;
+      inset: 0;
+      pointer-events: none;
+      background:
+        radial-gradient(circle at 50% 46%, rgba(163, 255, 91, 0.07), transparent 38%),
+        linear-gradient(rgba(255,255,255,0.018) 1px, transparent 1px);
+      background-size: auto, 100% 4px;
+      mix-blend-mode: screen;
+    }
+
+    .transparent-mode,
+    .transparent-mode body {
+      background: transparent;
+    }
+
+    .transparent-mode body::before {
+      display: none;
+    }
+
+    canvas {
+      position: fixed;
+      top: 0;
+      left: 0;
+      display: block;
+    }
+
+    #portrait { z-index: 0; }
+    #warpCanvas {
+      z-index: 1;
+      pointer-events: none;
+    }
+
+    #sourcePreview {
+      z-index: 2;
+      pointer-events: none;
+      background: #000;
+    }
+
+    #sourcePreview[hidden] { display: none; }
+    .transparent-mode #sourcePreview { background: transparent; }
+    .is-source-view #portrait,
+    .is-source-view #warpCanvas { visibility: hidden !important; }
+
+    .embed-mode .topbar,
+    .embed-mode .control-panel,
+    .embed-mode .intro,
+    .embed-mode .status {
+      display: none !important;
+    }
+
+    .embed-mode .status.is-error { display: block !important; }
+
+    .drop-target:has(+ input:focus-visible),
+    .file-label:has(+ input:focus-visible) {
+      outline: 2px solid var(--accent);
+      outline-offset: 4px;
+    }
+
+    .topbar {
+      position: fixed;
+      top: 18px;
+      left: 18px;
+      right: var(--workspace-rail);
+      z-index: 7;
+      display: flex;
+      align-items: center;
+      justify-content: flex-start;
+      gap: 24px;
+      pointer-events: none;
+    }
+
+    .brand-block {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      min-height: 42px;
+      padding: 0 15px;
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      background: rgba(4, 6, 4, 0.58);
+      backdrop-filter: blur(18px) saturate(1.15);
+      box-shadow: 0 12px 34px rgba(0, 0, 0, 0.18);
+    }
+
+    .brand-signal {
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      background: var(--accent);
+      box-shadow: 0 0 16px rgba(198, 255, 145, 0.68);
+    }
+
+    .brand {
+      margin: 0;
+      font-size: 10px;
+      font-weight: 600;
+      letter-spacing: 0.16em;
+      text-transform: uppercase;
+      color: rgba(239, 255, 223, 0.78);
+    }
+
+    .stage-meta {
+      color: var(--faint);
+      font-size: 8px;
+      font-weight: 600;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+    }
+
+    button,
+    .file-label {
+      appearance: none;
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      background: rgba(7, 10, 7, 0.76);
+      color: var(--ink);
+      min-height: 42px;
+      padding: 0 14px;
+      font: inherit;
+      font-size: 10px;
+      font-weight: 600;
+      letter-spacing: 0.07em;
+      cursor: pointer;
+      backdrop-filter: blur(18px) saturate(1.15);
+      box-shadow: 0 12px 34px rgba(0, 0, 0, 0.2);
+      transition: border-color 160ms ease, background 160ms ease, color 160ms ease, transform 160ms ease;
+    }
+
+    button:hover,
+    .file-label:hover {
+      border-color: var(--line-strong);
+      background: rgba(27, 39, 21, 0.9);
+      transform: translateY(-1px);
+    }
+
+    button:focus-visible,
+    .file-label:has(+ input:focus-visible) {
+      outline: 2px solid rgba(198, 255, 145, 0.72);
+      outline-offset: 3px;
+    }
+
+    .button-primary {
+      border-color: rgba(198, 255, 145, 0.42);
+      background: var(--accent);
+      color: var(--accent-dark);
+      box-shadow: 0 12px 34px rgba(104, 154, 65, 0.12);
+    }
+
+    .button-primary:hover {
+      border-color: var(--accent);
+      background: #d5ffad;
+    }
+
+    input[type="file"] {
+      position: fixed;
+      width: 1px;
+      height: 1px;
+      opacity: 0;
+      pointer-events: none;
+    }
+
+    .control-panel {
+      position: fixed;
+      top: 18px;
+      right: 18px;
+      bottom: 18px;
+      z-index: 6;
+      display: flex;
+      flex-direction: column;
+      width: var(--panel-width);
+      overflow: hidden;
+      border: 1px solid var(--line);
+      border-radius: 18px;
+      background: var(--panel);
+      backdrop-filter: blur(28px) saturate(1.2);
+      box-shadow: 0 28px 90px rgba(0, 0, 0, 0.42), inset 0 1px rgba(255, 255, 255, 0.025);
+    }
+
+    .panel-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 18px;
+      min-height: 76px;
+      padding: 15px 16px 15px 19px;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .panel-head-tools {
+      display: flex;
+      align-items: center;
+      gap: 9px;
+    }
+
+    .language-control {
+      position: relative;
+      display: block;
+    }
+
+    .language-control select {
+      appearance: none;
+      min-width: 76px;
+      min-height: 32px;
+      border: 1px solid var(--line);
+      border-radius: 9px;
+      outline: 0;
+      padding: 0 23px 0 10px;
+      background: rgba(239, 255, 223, 0.045);
+      color: var(--ink);
+      font: 600 9px/1 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      cursor: pointer;
+    }
+
+    .language-control::after {
+      content: "⌄";
+      position: absolute;
+      top: 7px;
+      right: 8px;
+      color: var(--faint);
+      pointer-events: none;
+    }
+
+    .language-control select:focus-visible {
+      outline: 2px solid rgba(198, 255, 145, 0.72);
+      outline-offset: 2px;
+    }
+
+    .panel-kicker,
+    .group-kicker {
+      display: block;
+      margin-bottom: 4px;
+      color: var(--faint);
+      font-size: 8px;
+      font-weight: 600;
+      letter-spacing: 0.15em;
+      text-transform: uppercase;
+    }
+
+    .panel-title {
+      margin: 0;
+      font-size: 13px;
+      font-weight: 600;
+      letter-spacing: 0.02em;
+    }
+
+    .panel-live {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      color: var(--muted);
+      font-size: 8px;
+      font-weight: 600;
+      letter-spacing: 0.13em;
+    }
+
+    .panel-live::before {
+      content: "";
+      width: 5px;
+      height: 5px;
+      border-radius: 50%;
+      background: var(--accent);
+      box-shadow: 0 0 10px rgba(198, 255, 145, 0.55);
+    }
+
+    .panel-scroll {
+      flex: 1;
+      overflow: auto;
+      overscroll-behavior: contain;
+      scrollbar-width: thin;
+      scrollbar-color: rgba(239, 255, 223, 0.18) transparent;
+    }
+
+    .panel-actions {
+      flex: none;
+      display: grid;
+      grid-template-columns: 1fr;
+      gap: 8px;
+      padding: 12px;
+      border-top: 1px solid var(--line);
+      background: rgba(4, 7, 4, 0.86);
+      box-shadow: 0 -18px 40px rgba(0, 0, 0, 0.18);
+    }
+
+    .panel-actions button,
+    .panel-actions .file-label {
+      display: grid;
+      place-items: center;
+      min-width: 0;
+      min-height: 40px;
+      padding: 0 10px;
+      text-align: center;
+      box-shadow: none;
+    }
+
+    .export-actions {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      min-width: 0;
+      gap: 8px;
+      overflow: visible;
+    }
+
+    .export-actions select {
+      min-width: 0;
+      appearance: none;
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      outline: 0;
+      padding: 0 12px;
+      background: var(--panel-solid);
+      color: var(--ink);
+      font: 500 11px/1.4 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      cursor: pointer;
+    }
+
+    .export-actions select:focus-visible {
+      outline: 2px solid var(--accent);
+      outline-offset: 2px;
+    }
+
+    .export-actions .button-primary {
+      min-width: 76px;
+      min-height: 40px;
+      border: 1px solid rgba(198, 255, 145, 0.42);
+      border-radius: 10px;
+      padding: 0 10px;
+      box-shadow: none;
+    }
+
+    .export-actions:has(:disabled) { opacity: 0.58; }
+
+    .control-group {
+      padding: 19px 18px 20px;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .control-group:last-child { border-bottom: 0; }
+
+    .group-heading {
+      display: flex;
+      align-items: baseline;
+      justify-content: space-between;
+      gap: 16px;
+      margin-bottom: 13px;
+    }
+
+    .group-heading h3 {
+      margin: 0;
+      color: rgba(239, 255, 223, 0.88);
+      font-size: 11px;
+      font-weight: 600;
+      letter-spacing: 0.09em;
+    }
+
+    .group-heading span {
+      color: var(--faint);
+      font-size: 8px;
+      letter-spacing: 0.08em;
+    }
+
+    .control-stack {
+      display: grid;
+      gap: 9px;
+    }
+
+    .control-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 9px;
+    }
+
+    .control-item {
+      min-width: 0;
+      border: 1px solid transparent;
+      border-radius: 11px;
+      background: var(--field);
+      transition: border-color 160ms ease, background 160ms ease;
+    }
+
+    .control-item:hover {
+      border-color: var(--line);
+      background: var(--field-hover);
+    }
+
+    .select-control {
+      position: relative;
+      display: grid;
+      gap: 7px;
+      padding: 10px 11px 9px;
+    }
+
+    .select-control > span,
+    .control-head > span {
+      color: var(--muted);
+      font-size: 9px;
+      letter-spacing: 0.06em;
+      pointer-events: none;
+    }
+
+    .select-control::after {
+      content: "⌄";
+      position: absolute;
+      right: 10px;
+      bottom: 10px;
+      color: var(--faint);
+      pointer-events: none;
+    }
+
+    .select-control select {
+      width: 100%;
+      min-width: 0;
+      appearance: none;
+      border: 0;
+      outline: 0;
+      background: transparent;
+      color: var(--ink);
+      padding: 0 18px 0 0;
+      font: inherit;
+      font-size: 11px;
+      font-weight: 600;
+      line-height: 1.35;
+      cursor: pointer;
+    }
+
+    .select-control select option {
+      background: var(--panel-solid);
+      color: var(--ink);
+    }
+
+    .select-control:focus-within {
+      border-color: rgba(198, 255, 145, 0.48);
+      background: rgba(185, 255, 125, 0.09);
+    }
+
+    .select-control:has(select:disabled) { opacity: 0.42; }
+
+    .slider-control {
+      display: grid;
+      gap: 9px;
+      padding: 10px 11px 11px;
+    }
+
+    .control-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+    }
+
+    .slider-control output {
+      min-width: 4ch;
+      color: rgba(239, 255, 223, 0.82);
+      font-size: 10px;
+      font-weight: 600;
+      text-align: right;
+    }
+
+    .slider-control input[type="range"] {
+      width: 100%;
+      height: 12px;
+      margin: 0;
+      appearance: none;
+      background: transparent;
+      cursor: ew-resize;
+    }
+
+    .slider-control input[type="range"]::-webkit-slider-runnable-track {
+      height: 2px;
+      border-radius: 999px;
+      background: rgba(239, 255, 223, 0.2);
+    }
+
+    .slider-control input[type="range"]::-webkit-slider-thumb {
+      width: 13px;
+      height: 13px;
+      margin-top: -5.5px;
+      appearance: none;
+      border: 1px solid var(--accent);
+      border-radius: 50%;
+      background: #182311;
+      box-shadow: 0 0 0 3px rgba(198, 255, 145, 0.08), 0 0 12px rgba(198, 255, 145, 0.18);
+    }
+
+    .slider-control input[type="range"]::-moz-range-track {
+      height: 2px;
+      border-radius: 999px;
+      background: rgba(239, 255, 223, 0.2);
+    }
+
+    .slider-control input[type="range"]::-moz-range-thumb {
+      width: 13px;
+      height: 13px;
+      border: 1px solid var(--accent);
+      border-radius: 50%;
+      background: #182311;
+    }
+
+    .slider-control input[type="range"]:focus-visible {
+      outline: 1px solid rgba(198, 255, 145, 0.68);
+      outline-offset: 4px;
+      border-radius: 999px;
+    }
+
+    .privacy-note {
+      margin: 12px 2px 0;
+      color: var(--faint);
+      font-size: 8px;
+      line-height: 1.6;
+    }
+
+    .clear-local-button {
+      width: 100%;
+      min-height: 36px;
+      margin-top: 9px;
+      box-shadow: none;
+      background: transparent;
+      color: var(--muted);
+    }
+
+    .intro {
+      position: fixed;
+      inset: 0 var(--workspace-rail) 0 0;
+      z-index: 3;
+      display: grid;
+      place-items: center;
+      padding: 24px;
+      pointer-events: none;
+      transition: opacity 500ms ease, visibility 500ms ease;
+    }
+
+    .intro.is-hidden {
+      opacity: 0;
+      visibility: hidden;
+    }
+
+    .intro-card {
+      width: min(520px, 100%);
+      border: 1px solid var(--line);
+      border-radius: 20px;
+      padding: 34px;
+      text-align: center;
+      background: var(--panel);
+      backdrop-filter: blur(22px);
+      box-shadow: 0 30px 90px rgba(0,0,0,0.35);
+      pointer-events: auto;
+    }
+
+    .intro h1 {
+      margin: 0 0 12px;
+      font-family: ui-sans-serif, system-ui, sans-serif;
+      font-size: clamp(30px, 7vw, 58px);
+      font-weight: 500;
+      line-height: 0.98;
+      letter-spacing: -0.045em;
+    }
+
+    .intro p {
+      margin: 0 auto 24px;
+      max-width: 40ch;
+      color: var(--muted);
+      font: 14px/1.7 ui-sans-serif, system-ui, sans-serif;
+    }
+
+    .drop-target {
+      display: block;
+      border: 1px dashed rgba(236, 255, 207, 0.36);
+      border-radius: 14px;
+      padding: 18px;
+      color: var(--ink);
+      font-size: 12px;
+      cursor: pointer;
+      transition: background 180ms ease, border-color 180ms ease;
+    }
+
+    .drop-target:hover, .drop-target.is-over {
+      background: rgba(177, 255, 112, 0.08);
+      border-color: rgba(236, 255, 207, 0.8);
+    }
+
+    .demo-button {
+      width: 100%;
+      margin-top: 14px;
+    }
+
+    .intro-card { max-height: 100%; overflow-y: auto; }
+    .intro.is-browsing-demos .intro-welcome { display: none; }
+    .demo-gallery[hidden] { display: none; }
+    .demo-gallery h2 {
+      margin: 0 0 8px;
+      font: 500 clamp(22px, 3vw, 32px)/1.1 ui-sans-serif, system-ui, sans-serif;
+      letter-spacing: -0.035em;
+    }
+    .intro .demo-gallery p { margin-bottom: 18px; font-size: 12px; }
+    .demo-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
+    .demo-card {
+      min-width: 0;
+      padding: 0;
+      overflow: hidden;
+      border-radius: 12px;
+      background: #050805;
+      text-align: left;
+    }
+    .demo-card img { display: block; width: 100%; height: auto; aspect-ratio: 3 / 4; object-fit: cover; }
+    .demo-card span { display: block; padding: 12px 9px; font-size: 10px; letter-spacing: 0.02em; }
+    .demo-card[aria-pressed="true"] { border-color: var(--accent); }
+    .source-toolbar { padding: 16px 18px; border-bottom: 1px solid var(--line); }
+    .source-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 10px; }
+    .source-heading h3 { margin: 0; color: var(--muted); font-size: 9px; font-weight: 500; letter-spacing: 0.09em; text-transform: uppercase; }
+    .source-mode { color: var(--accent); font-size: 9px; }
+    .preview-switch { display: grid; grid-template-columns: 1fr 1fr; gap: 4px; padding: 3px; border: 1px solid var(--line); border-radius: 11px; }
+    .preview-switch button { min-height: 34px; padding: 0 8px; border-color: transparent; border-radius: 7px; background: transparent; box-shadow: none; }
+    .preview-switch button[aria-pressed="true"] { color: var(--accent); border-color: rgba(198, 255, 145, 0.22); background: rgba(198, 255, 145, 0.09); }
+    .preview-switch button:disabled { opacity: 0.35; cursor: default; transform: none; }
+    .source-caption { min-height: 14px; margin: 9px 0 12px; color: var(--muted); font-size: 9px; line-height: 1.55; }
+    .demo-select-control { display: flex; align-items: center; justify-content: space-between; gap: 12px; font-size: 10px; color: var(--muted); }
+    .demo-select-control select { min-width: 0; max-width: 65%; min-height: 34px; padding: 0 9px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel-solid); color: var(--ink); font: inherit; cursor: pointer; }
+    .demo-select-control select:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+
+    .intro .demo-note {
+      margin: 9px auto 0;
+      font-size: 11px;
+      line-height: 1.5;
+    }
+
+    .status {
+      position: fixed;
+      left: 22px;
+      bottom: 18px;
+      z-index: 4;
+      margin: 0;
+      max-width: calc(100vw - var(--workspace-rail) - 44px);
+      color: var(--muted);
+      font-size: 10px;
+      letter-spacing: 0.06em;
+      line-height: 1.6;
+      overflow-wrap: anywhere;
+      pointer-events: none;
+    }
+
+    .intro:not(.is-hidden) ~ .status:not(.is-error) { display: none; }
+    .embed-mode .status { max-width: calc(100vw - 44px); }
+
+    .processor {
+      position: fixed;
+      inset: 0;
+      z-index: 12;
+      display: grid;
+      place-items: center;
+      padding: 24px;
+      background: rgba(5, 7, 5, 0.97);
+      overflow-y: auto;
+      opacity: 0;
+      visibility: hidden;
+      pointer-events: none;
+      transition: opacity 240ms ease, visibility 240ms ease;
+    }
+
+    .processor.is-active {
+      opacity: 1;
+      visibility: visible;
+      pointer-events: auto;
+    }
+
+    .processor-card {
+      width: min(460px, 100%);
+    }
+
+    .processor-meta,
+    .processor-foot {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 18px;
+      color: var(--muted);
+      font-size: 10px;
+      line-height: 1.4;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+    }
+
+    .processor-visual {
+      --processor-visual-height: min(42vh, 340px);
+      position: relative;
+      display: grid;
+      place-items: center;
+      height: var(--processor-visual-height);
+      margin: 13px 0;
+      overflow: hidden;
+      border: 1px solid var(--line);
+      border-radius: 18px;
+      background:
+        radial-gradient(circle at 50% 48%, rgba(184, 255, 125, 0.07), transparent 54%),
+        #050705;
+      box-shadow: 0 28px 90px rgba(0, 0, 0, 0.42);
+    }
+
+    .loader-ascii {
+      position: relative;
+      z-index: 1;
+      margin: 0;
+      color: rgba(227, 255, 205, 0.84);
+      font: 500 clamp(7px, 1.15vw, 10px)/0.92 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      letter-spacing: 0.03em;
+      text-align: center;
+      white-space: pre;
+      transform: scaleX(0.92);
+      opacity: 0.66;
+      animation: loader-pulse 2.6s ease-in-out infinite alternate;
+      animation-play-state: paused;
+    }
+
+    .loader-scan {
+      position: absolute;
+      z-index: 2;
+      left: 7%;
+      right: 7%;
+      height: 58px;
+      top: 0;
+      background: linear-gradient(transparent, rgba(198, 255, 145, 0.08), transparent);
+      animation: scan-portrait 3.2s linear infinite;
+      animation-play-state: paused;
+    }
+
+    .loader-scan::after {
+      content: "";
+      position: absolute;
+      left: 0;
+      right: 0;
+      top: 50%;
+      height: 1px;
+      background: linear-gradient(90deg, transparent, rgba(220, 255, 190, 0.65), transparent);
+      pointer-events: none;
+    }
+
+    .processor-progress {
+      position: relative;
+      height: 3px;
+      margin-top: 18px;
+      border-radius: 3px;
+      overflow: hidden;
+      background: rgba(236, 255, 207, 0.12);
+    }
+
+    .processor-progress-fill {
+      display: block;
+      width: 100%;
+      height: 100%;
+      background: var(--accent);
+      transform: scaleX(0);
+      transform-origin: left;
+      transition: transform 500ms cubic-bezier(.22, 1, .36, 1);
+    }
+
+    .processor-progress-active {
+      position: absolute;
+      inset: 0;
+      width: 25%;
+      overflow: hidden;
+      transform: translateX(0);
+      transition: transform 500ms cubic-bezier(.22, 1, .36, 1);
+    }
+
+    .processor-progress-active::after {
+      content: "";
+      position: absolute;
+      inset: 0;
+      background: linear-gradient(90deg, transparent, var(--accent), transparent);
+      animation: progress-sweep 1.5s ease-in-out infinite;
+      animation-play-state: paused;
+    }
+
+    .processor.is-active .loader-ascii,
+    .processor.is-active .loader-scan,
+    .processor.is-active .processor-progress-active::after { animation-play-state: running; }
+    .processor.is-complete .processor-progress-active,
+    .processor.is-complete .loader-scan { opacity: 0; }
+    .processor:not(.is-active) .processor-progress-active { opacity: 0; }
+    .processor.is-starting .processor-progress-fill,
+    .processor.is-starting .processor-progress-active { transition: none; }
+
+    .processor-steps {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 8px;
+      padding: 0;
+      margin: 12px 0 24px;
+      list-style: none;
+      color: var(--faint);
+      font-size: 10px;
+      line-height: 1.5;
+    }
+    .processor-steps .is-current { color: var(--accent); }
+    .processor-steps .is-done { color: var(--muted); }
+    .processor-step-count { font-variant-numeric: tabular-nums; white-space: nowrap; }
+    .processor-action {
+      display: grid;
+      justify-items: center;
+      gap: 8px;
+      text-align: center;
+    }
+    .processor-action button { min-height: 40px; padding: 0 18px; }
+    .processor-action button:disabled { opacity: 0.4; cursor: default; }
+    .processor-detail {
+      margin: 0;
+      max-width: 38em;
+      color: var(--muted);
+      font-size: 11px;
+      line-height: 1.7;
+    }
+
+    @keyframes loader-pulse {
+      0% { opacity: 0.52; }
+      100% { opacity: 0.82; }
+    }
+
+    @keyframes scan-portrait {
+      0% { transform: translateY(-58px); opacity: 0; }
+      12%, 88% { opacity: 1; }
+      100% { transform: translateY(var(--processor-visual-height)); opacity: 0; }
+    }
+
+    @keyframes progress-sweep {
+      from { transform: translateX(-100%); }
+      to { transform: translateX(100%); }
+    }
+
+    @media (max-height: 540px) {
+      .processor { padding: 16px; }
+      .processor-visual { --processor-visual-height: min(30vh, 150px); }
+      .processor-steps { margin-bottom: 14px; }
+    }
+
+    @media (min-width: 741px) and (max-width: 980px) {
+      .stage-meta { display: none; }
+    }
+
+    @media (max-width: 740px) {
+      .topbar {
+        top: 12px;
+        left: 12px;
+        right: 12px;
+      }
+
+      .brand-block { display: none; }
+      .stage-meta { display: none; }
+
+      .control-panel {
+        top: auto;
+        right: 10px;
+        bottom: 10px;
+        left: 10px;
+        width: auto;
+        height: min(52vh, 520px);
+        max-height: none;
+        border-radius: 17px;
+      }
+
+      .panel-header { min-height: 66px; padding-block: 11px; }
+      .control-group { padding: 17px 15px 18px; }
+      .intro { inset: 0 0 calc(min(52vh, 520px) + 20px) 0; }
+      .status {
+        left: 14px;
+        bottom: calc(min(52vh, 520px) + 22px);
+        max-width: calc(100vw - 28px);
+      }
+      .intro-card { padding: 28px 21px 22px; }
+      .intro { padding: 12px; }
+      .intro.is-browsing-demos .intro-card { padding: 18px; }
+      .demo-card img { max-height: 135px; }
+      .demo-grid { gap: 7px; }
+      .demo-card span { padding: 10px 6px; font-size: 9px; }
+      .source-toolbar { padding: 14px 15px; }
+    }
+
+    @media (max-width: 430px) {
+      .control-grid { grid-template-columns: 1fr; }
+      .panel-live { display: none; }
+      .panel-actions button,
+      .panel-actions .file-label { font-size: 9px; }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      button, .file-label, .intro { transition: none; }
+      .loader-ascii, .loader-scan { animation: none; }
+      .processor, .processor-progress-fill, .processor-progress-active { transition: none; }
+      .processor-progress-active::after { animation: none; opacity: 0.5; }
+      .loader-scan { display: none; }
+    }
+  </style>
+  <link rel="stylesheet" href="./studio-select.css" />
+</head>
+<body>
+  <canvas id="portrait" aria-label="Animated ASCII portrait" data-i18n-aria="portraitAria"></canvas>
+  <canvas id="warpCanvas" aria-hidden="true"></canvas>
+  <canvas id="sourcePreview" hidden role="img" aria-label="Original source image" data-i18n-aria="sourcePreviewAria"></canvas>
+
+  <header class="topbar">
+    <div class="brand-block" aria-label="ASCII Portrait Studio">
+      <span class="brand-signal" aria-hidden="true"></span>
+      <p class="brand">ASCII Portrait</p>
+    </div>
+    <span class="stage-meta" data-i18n="stageMeta">Local canvas renderer · private by default</span>
+  </header>
+
+  <aside class="control-panel" id="controlPanel" aria-label="Portrait inspector" data-i18n-aria="inspectorAria">
+    <div class="panel-header">
+      <div>
+        <span class="panel-kicker" data-i18n="panelKicker">ASCII portrait</span>
+        <h2 class="panel-title" data-i18n="panelTitle">Inspector</h2>
+      </div>
+      <div class="panel-head-tools">
+        <span class="panel-live" data-i18n="live">LIVE</span>
+        <label class="language-control">
+          <span class="sr-only" data-i18n="language">Language</span>
+          <select id="languageSelect" aria-label="Language" data-i18n-aria="language">
+            <option value="en" selected>English</option>
+            <option value="zh">中文</option>
+          </select>
+        </label>
+      </div>
+    </div>
+
+    <div class="panel-scroll">
+      <section class="source-toolbar" aria-labelledby="sourceTitle">
+        <div class="source-heading">
+          <h3 id="sourceTitle" data-i18n="sourceTitle">Source / result</h3>
+          <span class="source-mode" id="sourceModeLabel">ASCII view</span>
+        </div>
+        <div class="preview-switch" role="group" aria-label="Compare original and ASCII" data-i18n-aria="previewGroupAria">
+          <button id="originalViewButton" type="button" aria-pressed="false" aria-controls="sourcePreview" disabled data-i18n="previewOriginal">Original</button>
+          <button id="asciiViewButton" type="button" aria-pressed="true" aria-controls="portrait" disabled data-i18n="previewAscii">ASCII</button>
+        </div>
+        <p class="source-caption" id="sourceCaption">Choose an image to compare the source and result.</p>
+        <label class="demo-select-control" for="demoSelect">
+          <span data-i18n="demoSelectLabel">Demos</span>
+          <select id="demoSelect" aria-label="Choose a demo image" data-i18n-aria="demoSelectAria">
+            <option value="" data-i18n="demoSelectPlaceholder">Choose a subject</option>
+          </select>
+        </label>
+      </section>
+      <section class="control-group" aria-labelledby="structureTitle">
+        <div class="group-heading">
+          <h3 id="structureTitle" data-i18n="structureTitle">Structure</h3>
+          <span data-i18n="structureTag">TYPE</span>
+        </div>
+        <div class="control-stack">
+          <label class="control-item slider-control" for="gridRange" title="Smaller is denser; larger is more graphic" data-i18n-title="gridHelp">
+            <span class="control-head"><span data-i18n="gridSize">Grid size</span><output id="gridValue" for="gridRange">8.0</output></span>
+            <input id="gridRange" type="range" min="5.5" max="13" step="0.25" value="8" aria-label="Adjust ASCII grid size" data-i18n-aria="gridAria" />
+          </label>
+          <div class="control-grid">
+            <label class="control-item select-control" for="levelsSelect">
+              <span data-i18n="characterLevels">Character levels</span>
+              <select id="levelsSelect" aria-label="Choose character levels" data-i18n-aria="levelsAria">
+                <option value="0" selected data-i18n="levels19">19 levels</option>
+                <option value="1" data-i18n="levels27">27 levels</option>
+              </select>
+            </label>
+            <label class="control-item select-control" for="warpSelect">
+              <span data-i18n="displacement">Displacement</span>
+              <select id="warpSelect" aria-label="Choose displacement strength" data-i18n-aria="warpAria">
+                <option value="0" data-i18n="off">Off</option>
+                <option value="1" data-i18n="warpSubtle">Subtle</option>
+                <option value="2" selected data-i18n="warpDefined">Defined</option>
+                <option value="3" data-i18n="warpExtreme">Extreme</option>
+              </select>
+            </label>
+          </div>
+        </div>
+      </section>
+
+      <section class="control-group" aria-labelledby="colorTitle">
+        <div class="group-heading">
+          <h3 id="colorTitle" data-i18n="toneTitle">Tone & color</h3>
+          <span data-i18n="toneTag">COLOR</span>
+        </div>
+        <div class="control-stack">
+          <div class="control-grid">
+            <label class="control-item select-control" for="colorSelect">
+              <span data-i18n="colorMode">Color mode</span>
+              <select id="colorSelect" aria-label="Choose color mode" data-i18n-aria="colorAria">
+                <option value="0" selected data-i18n="colorOriginal">Original</option>
+                <option value="1" data-i18n="colorMono">Monochrome</option>
+                <option value="2" data-i18n="colorGreen">Signal green</option>
+                <option value="3" data-i18n="colorOrange">Amber</option>
+                <option value="4" data-i18n="colorBlue">Cobalt</option>
+              </select>
+            </label>
+            <label class="control-item slider-control" for="contrastRange">
+              <span class="control-head"><span data-i18n="contrast">Contrast</span><output id="contrastValue" for="contrastRange">−12</output></span>
+              <input id="contrastRange" type="range" min="-40" max="60" step="1" value="-12" aria-label="Adjust portrait contrast" data-i18n-aria="contrastAria" />
+            </label>
+          </div>
+          <div class="control-grid">
+            <label class="control-item slider-control" for="temperatureRange" title="Move left for cooler tones, right for warmer tones" data-i18n-title="temperatureHelp">
+              <span class="control-head"><span data-i18n="temperature">Temperature</span><output id="temperatureValue" for="temperatureRange">0</output></span>
+              <input id="temperatureRange" type="range" min="-50" max="50" step="1" value="0" aria-label="Adjust color temperature" data-i18n-aria="temperatureAria" />
+            </label>
+            <label class="control-item slider-control" for="tintRange" title="Move left for green, right for magenta" data-i18n-title="tintHelp">
+              <span class="control-head"><span data-i18n="tint">Tint</span><output id="tintValue" for="tintRange">0</output></span>
+              <input id="tintRange" type="range" min="-50" max="50" step="1" value="0" aria-label="Adjust green-magenta tint" data-i18n-aria="tintAria" />
+            </label>
+          </div>
+        </div>
+      </section>
+
+      <section class="control-group" aria-labelledby="motionTitle">
+        <div class="group-heading">
+          <h3 id="motionTitle" data-i18n="motionTitle">Motion</h3>
+          <span data-i18n="motionTag">DYNAMICS</span>
+        </div>
+        <div class="control-stack">
+          <label class="control-item select-control" for="motionSelect">
+            <span data-i18n="motionMode">Motion mode</span>
+            <select id="motionSelect" aria-label="Choose motion mode" data-i18n-aria="motionAria">
+              <option value="0" selected data-i18n="motionCode">Organic code</option>
+              <option value="1" data-i18n="motionParticles">Particle glint</option>
+              <option value="2" data-i18n="motionTide">Character tide</option>
+              <option value="3" data-i18n="off">Off</option>
+            </select>
+          </label>
+          <label class="control-item slider-control" for="motionStrengthRange" title="Animate the existing character composition" data-i18n-title="motionHelp">
+            <span class="control-head"><span data-i18n="motionStrength">Intensity</span><output id="motionStrengthValue" for="motionStrengthRange">82</output></span>
+            <input id="motionStrengthRange" type="range" min="0" max="100" step="1" value="82" aria-label="Adjust ASCII motion intensity" data-i18n-aria="motionStrengthAria" />
+          </label>
+        </div>
+      </section>
+
+      <section class="control-group" aria-labelledby="sceneTitle">
+        <div class="group-heading">
+          <h3 id="sceneTitle" data-i18n="sceneTitle">Scene</h3>
+          <span data-i18n="sceneTag">BACKGROUND</span>
+        </div>
+        <label class="control-item select-control" for="backgroundSelect">
+          <span data-i18n="backgroundMode">Background</span>
+          <select id="backgroundSelect" aria-label="Choose background mode" data-i18n-aria="backgroundAria">
+            <option value="0" selected data-i18n="backgroundArt">Character field</option>
+            <option value="1" data-i18n="backgroundBlack">Pure black</option>
+            <option value="2" data-i18n="backgroundOriginal">Source field</option>
+          </select>
+        </label>
+        <p class="privacy-note" data-i18n="privacyNote">Your photo and adjustments are saved in this browser. Photos are never uploaded.</p>
+        <p class="privacy-note" id="storageWarning" role="status" hidden data-i18n="statusStorageUnavailable">Local saving is unavailable · your image still works until this tab is closed</p>
+        <button class="clear-local-button" id="clearLocalDataButton" type="button" data-i18n="clearLocal">Clear local data</button>
+      </section>
+    </div>
+
+    <footer class="panel-actions">
+      <label class="file-label" for="filePicker" data-i18n="changePhoto">Change photo</label>
+      <input id="filePicker" type="file" accept="image/*,.heic,.heif" />
+      <div class="export-actions">
+        <label class="sr-only" for="exportFormatSelect" data-i18n="exportFormat">Export format</label>
+        <select id="exportFormatSelect" aria-label="Choose export format" data-i18n-aria="exportFormatAria">
+          <option value="png" data-i18n="exportPng">PNG still</option>
+          <option value="video" data-i18n="exportVideo">Looping video · 6s</option>
+        </select>
+        <button class="button-primary" id="downloadButton" type="button" data-i18n="exportAction">Export</button>
+      </div>
+    </footer>
+  </aside>
+
+  <section class="intro" id="intro">
+    <div class="intro-card">
+      <div class="intro-welcome">
+      <h1 data-i18n="introTitle">ASCII, alive.</h1>
+      <p data-i18n="introCopy">Choose or drop a portrait. Local tone analysis converts it into a 19- or 27-level ASCII composition.</p>
+      <label class="drop-target" id="dropTarget" for="heroFilePicker">
+        <span data-i18n="dropPhoto">Choose a portrait or drop it here</span>
+      </label>
+      <input id="heroFilePicker" type="file" accept="image/*,.heic,.heif" />
+      </div>
+      <div class="demo-gallery" id="demoGallery" hidden>
+        <h2 data-i18n="demoGalleryTitle">Choose a starting point.</h2>
+        <p data-i18n="demoGalleryCopy">Pick a source. Watch it become ASCII.</p>
+        <div class="demo-grid" id="demoGrid" role="group" aria-label="Demo subjects" data-i18n-aria="demoSubjectsAria"></div>
+      </div>
+      <button class="demo-button" id="demoButton" type="button" aria-describedby="demoNote" aria-expanded="false" aria-controls="demoGallery">Explore demo gallery</button>
+      <p class="demo-note" id="demoNote" data-i18n="demoNote">AI-generated examples · no upload needed</p>
+    </div>
+  </section>
+
+  <p class="status" id="status" role="status" aria-live="polite">Awaiting image</p>
+
+  <section class="processor" id="processor" role="dialog" aria-modal="true" aria-labelledby="processorStage" aria-describedby="processorDetail" aria-hidden="true">
+    <div class="processor-card">
+      <div class="processor-meta">
+        <span id="processorStage" role="status" aria-live="polite">Preparing image</span>
+        <span id="processorStepCount" class="processor-step-count">01 / 04</span>
+      </div>
+      <div class="processor-visual">
+        <pre class="loader-ascii" id="loaderAscii" aria-hidden="true"></pre>
+        <div class="loader-scan" aria-hidden="true"></div>
+      </div>
+      <div class="processor-foot">
+        <span data-i18n="processorLocal">Processing on your device</span>
+        <span id="levelLabel">ASCII / 19 levels</span>
+      </div>
+      <div class="processor-progress" id="processorProgress" role="progressbar" aria-labelledby="processorStage" aria-valuemin="0" aria-valuemax="4">
+        <span class="processor-progress-fill" id="processorBar"></span>
+        <span class="processor-progress-active" id="processorActivity"></span>
+      </div>
+      <ol class="processor-steps" aria-hidden="true">
+        <li id="processorStep1" data-i18n="stepPrepare">Prepare</li>
+        <li id="processorStep2" data-i18n="stepLoad">Load model</li>
+        <li id="processorStep3" data-i18n="stepSeparate">Separate</li>
+        <li id="processorStep4" data-i18n="stepRender">Render ASCII</li>
+      </ol>
+      <div class="processor-action">
+        <button id="skipAnalysisButton" type="button" data-i18n="skipAnalysis">Keep original background</button>
+        <p class="processor-detail" id="processorDetail" data-i18n="skipAnalysisHelp">Skip background separation. Your entire photo will still become ASCII art.</p>
+      </div>
+    </div>
+  </section>
+
+  <script src="./motion-export.js"></script>
+  <script src="./studio-select.js"></script>
+  <script>
+    (() => {
+      const embedMode = document.documentElement.classList.contains('embed-mode');
+      const transparentMode = document.documentElement.classList.contains('transparent-mode');
+      const embedParams = embedMode ? new URLSearchParams(location.search) : null;
+      const canvas = document.querySelector('#portrait');
+      const warpCanvas = document.querySelector('#warpCanvas');
+      // A presentation-only layer. Export snapshots use the ASCII buffers below.
+      const sourcePreview = document.querySelector('#sourcePreview');
+      const sourcePreviewCtx = sourcePreview.getContext('2d');
+      const ctx = canvas.getContext('2d', { alpha: transparentMode });
+      const sampleCanvas = document.createElement('canvas');
+      const sampleCtx = sampleCanvas.getContext('2d', { willReadFrequently: true });
+      const heightCanvas = document.createElement('canvas');
+      const heightCtx = heightCanvas.getContext('2d');
+      const staticCanvas = document.createElement('canvas');
+      const staticCtx = staticCanvas.getContext('2d', { alpha: transparentMode });
+      const animatedCanvas = document.createElement('canvas');
+      const animatedCtx = animatedCanvas.getContext('2d', { alpha: transparentMode });
+      const glowCanvas = document.createElement('canvas');
+      const glowCtx = glowCanvas.getContext('2d');
+      const intro = document.querySelector('#intro');
+      const status = document.querySelector('#status');
+      const dropTarget = document.querySelector('#dropTarget');
+      const demoButton = document.querySelector('#demoButton');
+      const demoGallery = document.querySelector('#demoGallery');
+      const demoGrid = document.querySelector('#demoGrid');
+      const demoSelect = document.querySelector('#demoSelect');
+      const originalViewButton = document.querySelector('#originalViewButton');
+      const asciiViewButton = document.querySelector('#asciiViewButton');
+      const sourceModeLabel = document.querySelector('#sourceModeLabel');
+      const sourceCaption = document.querySelector('#sourceCaption');
+      const demoPortraits = [
+        { id: 'portrait', source: './assets/demo-portrait.jpg', labelKey: 'demoPortrait' },
+        { id: 'astronaut', source: './assets/demo-astronaut.jpg', labelKey: 'demoAstronaut' },
+        { id: 'mecha', source: './assets/demo-mecha.jpg', labelKey: 'demoMecha' }
+      ];
+      demoPortraits.forEach((demo) => {
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.className = 'demo-card';
+        button.dataset.demoId = demo.id;
+        button.setAttribute('aria-pressed', 'false');
+        const thumbnail = document.createElement('img');
+        thumbnail.src = demo.source;
+        thumbnail.alt = '';
+        // The gallery starts hidden; skip ~1 MB of demo photos until it opens.
+        thumbnail.loading = 'lazy';
+        thumbnail.decoding = 'async';
+        thumbnail.width = 180;
+        thumbnail.height = 240;
+        const label = document.createElement('span');
+        label.dataset.i18n = demo.labelKey;
+        button.append(thumbnail, label);
+        button.addEventListener('click', () => void loadDemoPortrait(demo.id));
+        demoGrid.append(button);
+        const option = document.createElement('option');
+        option.value = demo.id;
+        option.dataset.i18n = demo.labelKey;
+        demoSelect.append(option);
+      });
+      const filePickers = [document.querySelector('#filePicker'), document.querySelector('#heroFilePicker')];
+      const gridRange = document.querySelector('#gridRange');
+      const gridValue = document.querySelector('#gridValue');
+      const levelsSelect = document.querySelector('#levelsSelect');
+      const colorSelect = document.querySelector('#colorSelect');
+      const contrastRange = document.querySelector('#contrastRange');
+      const contrastValue = document.querySelector('#contrastValue');
+      const temperatureRange = document.querySelector('#temperatureRange');
+      const temperatureValue = document.querySelector('#temperatureValue');
+      const tintRange = document.querySelector('#tintRange');
+      const tintValue = document.querySelector('#tintValue');
+      const warpSelect = document.querySelector('#warpSelect');
+      const motionSelect = document.querySelector('#motionSelect');
+      const motionStrengthRange = document.querySelector('#motionStrengthRange');
+      const motionStrengthValue = document.querySelector('#motionStrengthValue');
+      const backgroundSelect = document.querySelector('#backgroundSelect');
+      const downloadButton = document.querySelector('#downloadButton');
+      const exportFormatSelect = document.querySelector('#exportFormatSelect');
+      const clearLocalDataButton = document.querySelector('#clearLocalDataButton');
+      const storageWarning = document.querySelector('#storageWarning');
+      const controlPanel = document.querySelector('#controlPanel');
+      const processor = document.querySelector('#processor');
+      const processorStage = document.querySelector('#processorStage');
+      const processorStepCount = document.querySelector('#processorStepCount');
+      const processorBar = document.querySelector('#processorBar');
+      const processorProgress = document.querySelector('#processorProgress');
+      const processorActivity = document.querySelector('#processorActivity');
+      const processorSteps = [1, 2, 3, 4].map((step) => document.querySelector(`#processorStep${step}`));
+      const loaderAscii = document.querySelector('#loaderAscii');
+      const levelLabel = document.querySelector('#levelLabel');
+      const skipAnalysisButton = document.querySelector('#skipAnalysisButton');
+      const languageSelect = document.querySelector('#languageSelect');
+      const inferenceCanvas = document.createElement('canvas');
+      const inferenceCtx = inferenceCanvas.getContext('2d', { willReadFrequently: true });
+      const loaderSampleCanvas = document.createElement('canvas');
+      const loaderSampleCtx = loaderSampleCanvas.getContext('2d', { willReadFrequently: true });
+
+      const translations = {
+        en: {
+          pageTitle: 'ASCII Portrait Studio',
+          portraitAria: 'Animated ASCII portrait',
+          stageMeta: 'Local canvas renderer · private by default',
+          inspectorAria: 'Portrait inspector',
+          panelKicker: 'ASCII portrait',
+          panelTitle: 'Inspector',
+          live: 'LIVE',
+          language: 'Language',
+          structureTitle: 'Structure',
+          structureTag: 'TYPE',
+          gridHelp: 'Smaller is denser; larger is more graphic',
+          gridSize: 'Grid size',
+          gridAria: 'Adjust ASCII grid size',
+          characterLevels: 'Character levels',
+          levelsAria: 'Choose character levels',
+          levels19: '19 levels',
+          levels27: '27 levels',
+          displacement: 'Displacement',
+          warpAria: 'Choose displacement strength',
+          off: 'Off',
+          warpSubtle: 'Subtle',
+          warpDefined: 'Defined',
+          warpExtreme: 'Extreme',
+          toneTitle: 'Tone & color',
+          toneTag: 'COLOR',
+          colorMode: 'Color mode',
+          colorAria: 'Choose color mode',
+          colorOriginal: 'Original',
+          colorMono: 'Monochrome',
+          colorGreen: 'Signal green',
+          colorOrange: 'Amber',
+          colorBlue: 'Cobalt',
+          contrast: 'Contrast',
+          contrastAria: 'Adjust portrait contrast',
+          temperatureHelp: 'Move left for cooler tones, right for warmer tones',
+          temperature: 'Temperature',
+          temperatureAria: 'Adjust color temperature',
+          tintHelp: 'Move left for green, right for magenta',
+          tint: 'Tint',
+          tintAria: 'Adjust green-magenta tint',
+          motionTitle: 'Motion',
+          motionTag: 'DYNAMICS',
+          motionMode: 'Motion mode',
+          motionAria: 'Choose motion mode',
+          motionCode: 'Organic code',
+          motionParticles: 'Particle glint',
+          motionTide: 'Character tide',
+          motionHelp: 'Animate the existing character composition',
+          motionStrength: 'Intensity',
+          motionStrengthAria: 'Adjust ASCII motion intensity',
+          sceneTitle: 'Scene',
+          sceneTag: 'BACKGROUND',
+          backgroundMode: 'Background',
+          backgroundAria: 'Choose background mode',
+          backgroundArt: 'Character field',
+          backgroundBlack: 'Pure black',
+          backgroundOriginal: 'Source field',
+          privacyNote: 'Your photo and adjustments are saved in this browser. Photos are never uploaded.',
+          clearLocal: 'Clear local data',
+          changePhoto: 'Change photo',
+          exportFormat: 'Export format',
+          exportFormatAria: 'Choose export format',
+          exportPng: 'PNG still',
+          exportVideo: 'Looping video · 6s',
+          exportAction: 'Export',
+          exporting: 'Exporting…',
+          cancelExport: 'Cancel export',
+          skipAnalysis: 'Keep original background',
+          skipAnalysisHelp: 'Skip background separation. Your entire photo will still become ASCII art.',
+          stepPrepare: 'Prepare',
+          stepLoad: 'Load model',
+          stepSeparate: 'Separate',
+          stepRender: 'Render ASCII',
+          processorDone: 'Ready',
+          introTitle: 'ASCII, alive.',
+          introCopy: 'Choose or drop a portrait. Local tone analysis converts it into a 19- or 27-level ASCII composition.',
+          dropPhoto: 'Choose a portrait or drop it here',
+          tryDemo: 'Explore demo gallery',
+          demoBack: 'Use your own photo',
+          demoNote: 'AI-generated examples · no upload needed',
+          demoGalleryTitle: 'Choose a starting point.',
+          demoGalleryCopy: 'Pick a source. Watch it become ASCII.',
+          demoSubjectsAria: 'Demo subjects',
+          demoPortrait: 'Human portrait',
+          demoAstronaut: 'Astronaut',
+          demoMecha: 'Mecha',
+          demoSelectLabel: 'Demos',
+          demoSelectAria: 'Choose a demo image',
+          demoSelectPlaceholder: 'Choose a subject',
+          sourceTitle: 'Source / result',
+          sourcePreviewAria: 'Original source image',
+          previewGroupAria: 'Compare original and ASCII',
+          previewOriginal: 'Original',
+          previewAscii: 'ASCII',
+          sourceModeOriginal: 'Original source',
+          sourceModeAscii: 'ASCII view',
+          sourceCaptionEmpty: 'Choose an image to compare the source and result.',
+          sourceCaptionDemo: '{subjectKey} · AI-generated source',
+          sourceCaptionDemoGeneric: 'Demo image · AI-generated source',
+          sourceCaptionPhoto: 'Your image · processed on this device',
+          sourceCaptionPreset: 'Character asset · original source unavailable',
+          sourceCaptionLoading: 'Loading source image…',
+          statusLoadingDemo: 'Loading demo image…',
+          statusDemoFailed: 'Demo could not load · try again or choose your own photo',
+          processorLocal: 'Processing on your device',
+          levelLabel: 'ASCII / {levels} levels',
+          processorPrepare: 'Preparing image',
+          processorRead: 'Reading portrait and color',
+          processorLoadSegmentation: 'Preparing background model',
+          processorSeparate: 'Separating portrait and background',
+          processorAnalyze: 'Reading tones and shaping characters',
+          processorRender: 'Rendering your ASCII portrait',
+          processorComplete: 'ASCII portrait complete',
+          processorPortraitComplete: '2D ASCII portrait complete',
+          processorSeparationComplete: 'Background separation complete',
+          processorBasicMode: 'Whole-photo ASCII ready',
+          statusWaiting: 'Awaiting image',
+          statusFixedAsset: '{columns} × {rows} fixed character asset',
+          statusAnalyzing: 'Separating portrait and analyzing tone…',
+          statusSegReady: 'Background separated · {levels}-level tone map ready',
+          statusSegFallbackSeparated: 'Background removed · tone-to-glyph map ready',
+          statusSegFallbackBasic: 'Background separation unavailable · using the complete photo',
+          statusRenderSummary: '{columns} × {rows} glyphs · grid {grid} · contrast {contrast} · {levels} levels · {colorKey} · {backgroundKey}',
+          statusRenderInterrupted: 'Rendering stopped · choose the portrait again',
+          statusReading: 'Reading image…',
+          statusLoaded: 'Image loaded',
+          statusDecodeFailed: 'This browser could not read the image. Convert HEIC to JPG, PNG or WebP and try again.',
+          statusWaitRender: 'Wait for the current portrait to finish rendering',
+          statusCleared: 'Photo and adjustments cleared from this browser',
+          statusClearFailed: 'Local data could not be cleared',
+          statusRequestedPortraitFailed: 'The requested portrait could not load · check its URL and CORS policy',
+          statusChoosePortrait: 'Choose or drop a portrait',
+          statusRestoring: 'Restoring the previous portrait…',
+          statusPresetFailed: 'The requested character asset could not load',
+          statusEmbedSourceFailed: 'Embed source missing. Add a portrait or preset URL parameter.',
+          statusRestored: 'Previous portrait restored',
+          statusExportUnavailable: 'Wait for the portrait to finish rendering before exporting',
+          statusPngExported: 'PNG still exported',
+          statusEncoding: 'Encoding video frames · {percent}%',
+          statusVideoExported: '{format} motion video exported',
+          statusVideoUnsupported: 'Frame-by-frame video export is unavailable. Try an up-to-date browser over HTTPS or localhost, or export PNG.',
+          statusExportFailed: 'Export failed · try PNG or another browser',
+          statusExportTimeoutFailed: 'The video encoder stopped responding. Retry, or export PNG.',
+          statusExportEncodingFailed: 'The video encoder did not return every frame. No incomplete video was saved. Retry, or export PNG.',
+          statusExportCancelled: 'Video export cancelled · keep this tab visible while encoding',
+          statusGpuFallback: 'Graphics unavailable · showing the still portrait',
+          statusStorageUnavailable: 'Local saving is unavailable · your image still works until this tab is closed'
+        },
+        zh: {
+          pageTitle: 'ASCII 人像工作室',
+          portraitAria: '动态 ASCII 人像',
+          stageMeta: '本地画布渲染 · 默认保护隐私',
+          inspectorAria: '人像调节面板',
+          panelKicker: 'ASCII 人像',
+          panelTitle: '调节面板',
+          live: '实时',
+          language: '语言',
+          structureTitle: '结构',
+          structureTag: '字符',
+          gridHelp: '数值越小越密集，越大越图形化',
+          gridSize: '网格大小',
+          gridAria: '调整 ASCII 网格大小',
+          characterLevels: '字符层级',
+          levelsAria: '选择字符层级',
+          levels19: '19 级',
+          levels27: '27 级',
+          displacement: '形变强度',
+          warpAria: '选择形变强度',
+          off: '关闭',
+          warpSubtle: '轻微',
+          warpDefined: '明显',
+          warpExtreme: '超强',
+          toneTitle: '影调与色彩',
+          toneTag: '色彩',
+          colorMode: '颜色模式',
+          colorAria: '选择颜色模式',
+          colorOriginal: '原色',
+          colorMono: '黑白',
+          colorGreen: '信号绿',
+          colorOrange: '琥珀橙',
+          colorBlue: '钴蓝',
+          contrast: '对比度',
+          contrastAria: '调整人像对比度',
+          temperatureHelp: '向左偏冷，向右偏暖',
+          temperature: '色温',
+          temperatureAria: '调整色温',
+          tintHelp: '向左偏绿，向右偏洋红',
+          tint: '色调',
+          tintAria: '调整绿色—洋红色调',
+          motionTitle: '动效',
+          motionTag: '动态',
+          motionMode: '动效模式',
+          motionAria: '选择动效模式',
+          motionCode: '有机代码',
+          motionParticles: '星点闪烁',
+          motionTide: '字符潮汐',
+          motionHelp: '在现有字符构图上调整动画幅度',
+          motionStrength: '动效强度',
+          motionStrengthAria: '调整 ASCII 动效强度',
+          sceneTitle: '场景',
+          sceneTag: '背景',
+          backgroundMode: '背景模式',
+          backgroundAria: '选择背景模式',
+          backgroundArt: '艺术字符场',
+          backgroundBlack: '纯黑',
+          backgroundOriginal: '原图背景',
+          privacyNote: '照片与调整参数自动保存在此浏览器，不会上传照片。',
+          clearLocal: '清除本地数据',
+          changePhoto: '更换照片',
+          exportFormat: '导出格式',
+          exportFormatAria: '选择导出格式',
+          exportPng: 'PNG 静态图',
+          exportVideo: '循环视频 · 6 秒',
+          exportAction: '导出',
+          exporting: '导出中…',
+          cancelExport: '取消导出',
+          skipAnalysis: '保留原图背景',
+          skipAnalysisHelp: '跳过背景分离，整张照片仍会转换为 ASCII 艺术。',
+          stepPrepare: '准备照片',
+          stepLoad: '加载模型',
+          stepSeparate: '分离背景',
+          stepRender: '生成字符',
+          processorDone: '已就绪',
+          introTitle: '让 ASCII 活起来。',
+          introCopy: '选择或拖入一张人像。本地影调分析会将它转换为 19 或 27 级 ASCII 构图。',
+          dropPhoto: '选择一张人像，或拖到这里',
+          tryDemo: '浏览示例画廊',
+          demoBack: '使用自己的照片',
+          demoNote: 'AI 生成示例 · 无需上传照片',
+          demoGalleryTitle: '选择一张，开始体验。',
+          demoGalleryCopy: '从原始图像，到动态 ASCII。',
+          demoSubjectsAria: '示例主题',
+          demoPortrait: '写真人像',
+          demoAstronaut: '宇航员',
+          demoMecha: '机甲',
+          demoSelectLabel: '示例',
+          demoSelectAria: '选择示例图像',
+          demoSelectPlaceholder: '选择一个主题',
+          sourceTitle: '原图 / 效果',
+          sourcePreviewAria: '原始图像',
+          previewGroupAria: '对比原图与 ASCII',
+          previewOriginal: '原图',
+          previewAscii: 'ASCII',
+          sourceModeOriginal: '原始图像',
+          sourceModeAscii: 'ASCII 效果',
+          sourceCaptionEmpty: '选择图像后，即可对比原图与转换效果。',
+          sourceCaptionDemo: '{subjectKey} · AI 生成原图',
+          sourceCaptionDemoGeneric: '示例图像 · AI 生成原图',
+          sourceCaptionPhoto: '你的图像 · 仅在本机处理',
+          sourceCaptionPreset: '字符资产 · 无可用原图',
+          sourceCaptionLoading: '正在加载原始图像…',
+          statusLoadingDemo: '正在加载示例图像…',
+          statusDemoFailed: '示例加载失败，请重试或选择自己的照片',
+          processorLocal: '正在本设备处理',
+          levelLabel: 'ASCII / {levels} 级',
+          processorPrepare: '准备图像',
+          processorRead: '读取照片与颜色',
+          processorLoadSegmentation: '准备背景分离模型',
+          processorSeparate: '分离人物与背景',
+          processorAnalyze: '读取明暗，构建字符',
+          processorRender: '正在生成 ASCII 人像',
+          processorComplete: '人像字符化完成',
+          processorPortraitComplete: '二维 ASCII 人像完成',
+          processorSeparationComplete: '背景分离完成',
+          processorBasicMode: '整张照片已转换为 ASCII',
+          statusWaiting: '等待图像',
+          statusFixedAsset: '{columns} × {rows} 固定字符资产',
+          statusAnalyzing: '正在分离人像并分析明暗…',
+          statusSegReady: '背景已分离，{levels} 级明暗映射已就绪',
+          statusSegFallbackSeparated: '背景已去除；明暗字符映射已就绪',
+          statusSegFallbackBasic: '背景分离不可用，保留完整照片',
+          statusRenderSummary: '{columns} × {rows} 字符 · 网格 {grid} · 对比度 {contrast} · {levels} 级 · {colorKey} · {backgroundKey}',
+          statusRenderInterrupted: '渲染中断，请重新选择肖像',
+          statusReading: '正在读取图像…',
+          statusLoaded: '图像已载入',
+          statusDecodeFailed: '浏览器无法读取图像；请先转换为 JPG、PNG 或 WebP',
+          statusWaitRender: '请等待当前肖像渲染完成',
+          statusCleared: '已清除本浏览器保存的照片与调整参数',
+          statusClearFailed: '本地保存清除失败',
+          statusRequestedPortraitFailed: '指定肖像无法加载，请检查地址与 CORS',
+          statusChoosePortrait: '请选择或拖入一张肖像',
+          statusRestoring: '正在恢复上次照片…',
+          statusPresetFailed: '指定字符资产加载失败',
+          statusEmbedSourceFailed: '缺少嵌入素材，请在网址中添加 portrait 或 preset 参数。',
+          statusRestored: '已恢复上次照片',
+          statusExportUnavailable: '请等待当前肖像渲染完成后再导出',
+          statusPngExported: 'PNG 静态图已导出',
+          statusEncoding: '正在逐帧编码视频 · {percent}%',
+          statusVideoExported: '{format} 动态视频已导出',
+          statusVideoUnsupported: '当前环境不支持逐帧视频导出。请使用新版浏览器，通过 HTTPS 或 localhost 打开，或导出 PNG。',
+          statusExportFailed: '导出失败，请改用 PNG 或其他浏览器',
+          statusExportTimeoutFailed: '视频编码器长时间未响应，请重试或导出 PNG。',
+          statusExportEncodingFailed: '视频编码器未返回完整帧，未保存不完整视频。请重试或导出 PNG。',
+          statusExportCancelled: '视频导出已取消，编码时请保持页面可见',
+          statusGpuFallback: '图形加速不可用，已显示静态肖像',
+          statusStorageUnavailable: '本地保存不可用，关闭页面前仍可使用与导出'
+        }
+      };
+      // Keep language preferences scoped to this studio; English is the default.
+      const languageStorageKey = 'ascii-portrait-public-language-v1';
+      let currentLanguage = 'en';
+      let statusMessage = { key: 'statusWaiting', values: {} };
+      let processorMessage = { key: 'processorPrepare', values: {} };
+      let exportInProgress = false;
+
+      function t(key, values = {}) {
+        const languageTable = translations[currentLanguage] || translations.en;
+        const template = languageTable[key] ?? translations.en[key] ?? key;
+        return template.replace(/\{(\w+)\}/g, (match, name) => {
+          const value = values[name];
+          if (value === undefined || value === null) return match;
+          if (name.endsWith('Key') && languageTable[value]) return t(value);
+          return String(value);
+        });
+      }
+
+      function getInitialLanguage() {
+        const requestedLanguage = embedParams?.get('lang');
+        if (requestedLanguage) return requestedLanguage.toLowerCase().startsWith('zh') ? 'zh' : 'en';
+        try {
+          return localStorage.getItem(languageStorageKey) === 'zh' ? 'zh' : 'en';
+        } catch (_) {
+          return 'en';
+        }
+      }
+
+      function applyLanguage(language, { persist = true } = {}) {
+        currentLanguage = language === 'zh' ? 'zh' : 'en';
+        document.documentElement.lang = currentLanguage === 'zh' ? 'zh-CN' : 'en';
+        document.title = t('pageTitle');
+        document.querySelectorAll('[data-i18n]').forEach((element) => {
+          element.textContent = t(element.dataset.i18n);
+        });
+        document.querySelectorAll('[data-i18n-aria]').forEach((element) => {
+          element.setAttribute('aria-label', t(element.dataset.i18nAria));
+        });
+        document.querySelectorAll('[data-i18n-title]').forEach((element) => {
+          element.setAttribute('title', t(element.dataset.i18nTitle));
+        });
+        languageSelect.value = currentLanguage;
+        status.textContent = t(statusMessage.key, statusMessage.values);
+        processorStage.textContent = t(processorMessage.key, processorMessage.values);
+        if (processor.classList.contains('is-complete')) processorStepCount.textContent = t('processorDone');
+        levelLabel.textContent = t('levelLabel', { levels: glyphs.length });
+        downloadButton.textContent = t(exportInProgress
+          ? (exportFormatSelect.value === 'video' ? 'cancelExport' : 'exporting')
+          : 'exportAction');
+        demoButton.textContent = t(demoGallery.hidden ? 'tryDemo' : 'demoBack');
+        syncSourceControls();
+        if (persist && !embedMode) {
+          try {
+            localStorage.setItem(languageStorageKey, currentLanguage);
+          } catch (_) {
+            // The editor remains bilingual even when storage is unavailable.
+          }
+        }
+        window.StudioSelects?.sync();
+      }
+
+      function clamp(value, minimum = 0, maximum = 1) {
+        return Math.max(minimum, Math.min(maximum, value));
+      }
+
+      function applyMidpointContrast(value, amount) {
+        const tone = clamp(value);
+        return tone < 0.5
+          ? 0.5 * Math.pow(tone * 2, amount)
+          : 1 - 0.5 * Math.pow((1 - tone) * 2, amount);
+      }
+
+      function formatSigned(value) {
+        if (value > 0) return `+${value}`;
+        if (value < 0) return `−${Math.abs(value)}`;
+        return '0';
+      }
+
+      function getGridMetrics(renderState = state) {
+        const cellX = renderState.gridSize;
+        return {
+          cellX,
+          cellY: cellX * 1.4,
+          fontSize: cellX * 1.4375
+        };
+      }
+
+      // Isolate this studio's photo storage from other editions on the same origin.
+      const portraitDatabaseName = 'ascii-portrait-public-v1';
+      const portraitStoreName = 'portraits';
+      const lastPortraitKey = 'last-portrait';
+      const assetPresetKey = 'frozen-asset-preset-v1';
+      const sessionSettingsKey = 'editor-settings-v1';
+      const settingKeys = ['gridSize', 'paletteIndex', 'colorModeIndex', 'contrast',
+        'temperature', 'tint', 'warpIndex', 'motionIndex', 'motionStrength', 'backgroundModeIndex'];
+      const MAX_PRESET_BYTES = 12 * 1024 * 1024;
+      const MAX_WORK_PIXELS = 1_800_000;
+      const LOOP_DURATION_MS = 6000;
+      let storageQueue = Promise.resolve();
+
+      function enqueuePortraitWrite(operation) {
+        const pending = storageQueue.catch(() => {}).then(operation);
+        storageQueue = pending.catch(() => {});
+        return pending;
+      }
+
+      function captureSettings() {
+        return Object.fromEntries(settingKeys.map((key) => [key, state[key]]));
+      }
+
+      function restoreSettings(settings) {
+        if (!settings || typeof settings !== 'object') return;
+        const bounds = {
+          gridSize: [5.5, 13], paletteIndex: [0, palettes.length - 1],
+          colorModeIndex: [0, colorModes.length - 1], contrast: [-100, 100],
+          temperature: [-100, 100], tint: [-100, 100], warpIndex: [0, warpModes.length - 1],
+          motionIndex: [0, motionModes.length - 1], motionStrength: [0, 100],
+          backgroundModeIndex: [0, backgroundModes.length - 1]
+        };
+        for (const key of settingKeys) {
+          const value = settings[key];
+          const [minimum, maximum] = bounds[key];
+          if (Number.isFinite(value) && value >= minimum && value <= maximum &&
+              (!key.endsWith('Index') || Number.isInteger(value))) state[key] = value;
+        }
+        glyphs = palettes[state.paletteIndex].glyphs;
+        syncControls();
+      }
+
+      function openPortraitDatabase() {
+        return new Promise((resolve, reject) => {
+          if (!('indexedDB' in window)) {
+            reject(new Error('IndexedDB is unavailable'));
+            return;
+          }
+          const request = indexedDB.open(portraitDatabaseName, 1);
+          let expired = false;
+          const timeout = setTimeout(() => {
+            expired = true;
+            reject(new Error('Portrait storage did not respond.'));
+          }, 5000);
+          request.onupgradeneeded = () => {
+            const database = request.result;
+            if (!database.objectStoreNames.contains(portraitStoreName)) {
+              database.createObjectStore(portraitStoreName);
+            }
+          };
+          request.onsuccess = () => {
+            clearTimeout(timeout);
+            if (expired) request.result.close();
+            else resolve(request.result);
+          };
+          request.onerror = () => {
+            clearTimeout(timeout);
+            reject(request.error || new Error('Could not open portrait storage'));
+          };
+          request.onblocked = () => {
+            clearTimeout(timeout);
+            expired = true;
+            reject(new Error('Portrait storage is blocked by another tab.'));
+          };
+        });
+      }
+
+      async function saveLastPortrait(file, epoch = state.storageEpoch, sourceToken = state.decodeToken) {
+        return enqueuePortraitWrite(async () => {
+          const database = await openPortraitDatabase();
+          try {
+            if (epoch !== state.storageEpoch || sourceToken !== state.decodeToken) return;
+            await new Promise((resolve, reject) => {
+              const transaction = database.transaction(portraitStoreName, 'readwrite');
+              transaction.objectStore(portraitStoreName).put({
+                blob: file,
+                name: file.name || 'portrait',
+                type: file.type || '',
+                savedAt: Date.now()
+              }, lastPortraitKey);
+              transaction.objectStore(portraitStoreName).put(captureSettings(), sessionSettingsKey);
+              transaction.oncomplete = resolve;
+              transaction.onerror = () => reject(transaction.error || new Error('Could not save portrait'));
+              transaction.onabort = () => reject(transaction.error || new Error('Portrait save was aborted'));
+            });
+          } finally {
+            database.close();
+          }
+        });
+      }
+
+      async function loadLastPortrait() {
+        const database = await openPortraitDatabase();
+        try {
+          return await new Promise((resolve, reject) => {
+            const transaction = database.transaction(portraitStoreName, 'readonly');
+            const request = transaction.objectStore(portraitStoreName).get(lastPortraitKey);
+            request.onsuccess = () => resolve(request.result || null);
+            request.onerror = () => reject(request.error || new Error('Could not restore portrait'));
+          });
+        } finally {
+          database.close();
+        }
+      }
+
+      async function saveSessionSettings(settings, epoch, sourceToken) {
+        return enqueuePortraitWrite(async () => {
+          const database = await openPortraitDatabase();
+          try {
+            if (epoch !== state.storageEpoch || sourceToken !== state.decodeToken ||
+                !state.image || state.demoMode) return;
+            await new Promise((resolve, reject) => {
+              const transaction = database.transaction(portraitStoreName, 'readwrite');
+              transaction.objectStore(portraitStoreName).put(settings, sessionSettingsKey);
+              transaction.oncomplete = resolve;
+              transaction.onerror = () => reject(transaction.error || new Error('Could not save editor settings'));
+              transaction.onabort = () => reject(transaction.error || new Error('Editor settings save was aborted'));
+            });
+          } finally {
+            database.close();
+          }
+        });
+      }
+
+      async function clearLocalPortraitData() {
+        state.storageEpoch += 1;
+        videoExportController?.abort();
+        storageWarning.hidden = true;
+        state.decodeToken += 1;
+        state.analysisToken += 1;
+        clearTimeout(state.sessionSaveTimer);
+        dismissProcessor();
+        stopRenderLoop();
+        state.image?.close?.();
+        state.image = null;
+        state.demoMode = false;
+        restoreBackgroundAfterDemo();
+        state.demoId = null;
+        state.pendingDemoId = null;
+        state.imageRequestPending = false;
+        state.samples = [];
+        state.segmentation = null;
+        state.analyzing = false;
+        state.frozenPreset = false;
+        state.staticReady = false;
+        state.lastSampleKey = '';
+        setPreviewMode('ascii');
+        sourcePreviewCtx.clearRect(0, 0, sourcePreview.width, sourcePreview.height);
+        motionSampleSource = null;
+        motionCandidates = [];
+        intro.classList.remove('is-hidden');
+        filePickers.forEach((picker) => { picker.value = ''; });
+        ctx.setTransform(1, 0, 0, 1, 0, 0);
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        for (const [buffer, context] of [[staticCanvas, staticCtx], [animatedCanvas, animatedCtx],
+          [glowCanvas, glowCtx]]) {
+          context.setTransform(1, 0, 0, 1, 0, 0);
+          context.clearRect(0, 0, buffer.width, buffer.height);
+        }
+        heightCanvas.width = 1;
+        heightCanvas.height = 1;
+        warpCanvas.style.display = 'none';
+        return enqueuePortraitWrite(async () => {
+          const database = await openPortraitDatabase();
+          try {
+            await new Promise((resolve, reject) => {
+              const transaction = database.transaction(portraitStoreName, 'readwrite');
+              const store = transaction.objectStore(portraitStoreName);
+              store.delete(lastPortraitKey);
+              store.delete(assetPresetKey);
+              store.delete(sessionSettingsKey);
+              transaction.oncomplete = resolve;
+              transaction.onerror = () => reject(transaction.error || new Error('Could not clear portrait data'));
+              transaction.onabort = () => reject(transaction.error || new Error('Portrait data removal was aborted'));
+            });
+          } finally {
+            database.close();
+          }
+        });
+      }
+
+      async function loadSessionSettings() {
+        const database = await openPortraitDatabase();
+        try {
+          return await new Promise((resolve, reject) => {
+            const request = database.transaction(portraitStoreName, 'readonly')
+              .objectStore(portraitStoreName).get(sessionSettingsKey);
+            request.onsuccess = () => resolve(request.result || null);
+            request.onerror = () => reject(request.error);
+          });
+        } finally { database.close(); }
+      }
+
+      const analysisLibraries = [
+        {
+          src: 'https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.22.0/dist/tf.min.js',
+          integrity: 'sha384-vE8hbVJ4lezako5rlvE7bY0BVzWlFhZncPlckrqNwcUQpVtgbENTgZ8TBbnPjZre'
+        },
+        {
+          src: 'https://cdn.jsdelivr.net/npm/@tensorflow-models/body-segmentation@1.0.2/dist/body-segmentation.min.js',
+          integrity: 'sha384-+Nfhv06p9s0N4jXs3zpNZ1UB0eCNMyjl5J10gmOGdPdVjxB3B2xfdZ1F2YINuWO/'
+        }
+      ];
+      let analysisLibrariesPromise = null;
+      let portraitSegmenterPromise = null;
+      let segmentationQueue = Promise.resolve();
+
+      function yieldToBrowser() {
+        return new Promise((resolve) => {
+          if (document.hidden) {
+            setTimeout(resolve, 0);
+            return;
+          }
+          requestAnimationFrame(() => setTimeout(resolve, 0));
+        });
+      }
+
+      function withTimeout(operation, milliseconds, disposeLateResult = () => {}) {
+        return new Promise((resolve, reject) => {
+          let expired = false;
+          const timer = setTimeout(() => {
+            expired = true;
+            reject(new Error('Portrait processing timed out.'));
+          }, milliseconds);
+          Promise.resolve(operation).then((value) => {
+            clearTimeout(timer);
+            if (expired) disposeLateResult(value);
+            else resolve(value);
+          }, (error) => {
+            clearTimeout(timer);
+            if (!expired) reject(error);
+          });
+        });
+      }
+
+      function loadPortraitAnalysisLibraries() {
+        if (window.tf && window.bodySegmentation) return Promise.resolve();
+        if (analysisLibrariesPromise) return analysisLibrariesPromise;
+        analysisLibrariesPromise = analysisLibraries.reduce(
+          (chain, library) => chain.then(() => new Promise((resolve, reject) => {
+            if ((library.src.includes('/tfjs@') && window.tf) ||
+                (library.src.includes('body-segmentation') && window.bodySegmentation)) {
+              resolve();
+              return;
+            }
+            const script = document.createElement('script');
+            script.src = library.src;
+            script.integrity = library.integrity;
+            script.crossOrigin = 'anonymous';
+            script.onload = resolve;
+            script.onerror = () => reject(new Error(`Could not load ${library.src}`));
+            document.head.appendChild(script);
+          })),
+          Promise.resolve()
+        ).catch((error) => {
+          analysisLibrariesPromise = null;
+          throw error;
+        });
+        return analysisLibrariesPromise;
+      }
+
+      function getPortraitSegmenter() {
+        if (portraitSegmenterPromise) return portraitSegmenterPromise;
+        portraitSegmenterPromise = (async () => {
+          await loadPortraitAnalysisLibraries();
+          if (!window.tf || !window.bodySegmentation) {
+            throw new Error('Portrait analysis libraries are unavailable.');
+          }
+          if (window.tf.getBackend() !== 'webgl') await window.tf.setBackend('webgl');
+          await window.tf.ready();
+          const model = window.bodySegmentation.SupportedModels.MediaPipeSelfieSegmentation;
+          return window.bodySegmentation.createSegmenter(model, {
+            runtime: 'tfjs',
+            modelType: 'general'
+          });
+        })().catch((error) => {
+          portraitSegmenterPromise = null;
+          throw error;
+        });
+        return portraitSegmenterPromise;
+      }
+
+      function queuePortraitSegmentation(segmenter, image, token) {
+        const operation = segmentationQueue.catch(() => {}).then(async () => {
+          if (token !== state.analysisToken) return null;
+          const input = prepareInferenceImage(image);
+          await yieldToBrowser();
+          if (token !== state.analysisToken) return null;
+          return segmenter.segmentPeople(input, {
+            multiSegmentation: false,
+            segmentBodyParts: false
+          });
+        });
+        segmentationQueue = operation.then(() => undefined, () => undefined);
+        return operation;
+      }
+
+      function createDisplacementRenderer(target) {
+        const gl = target.getContext('webgl2', {
+          alpha: transparentMode,
+          premultipliedAlpha: false,
+          antialias: false,
+          preserveDrawingBuffer: !embedMode,
+          powerPreference: 'high-performance'
+        });
+        if (!gl) {
+          target.style.display = 'none';
+          return null;
+        }
+
+        const vertexSource = [
+          '#version 300 es',
+          'in vec2 aPosition;',
+          'in vec2 aUv;',
+          'out vec2 vUv;',
+          'void main() {',
+          '  vUv = aUv;',
+          '  gl_Position = vec4(aPosition, 0.0, 1.0);',
+          '}'
+        ].join('\n');
+        const fragmentSource = [
+          '#version 300 es',
+          'precision highp float;',
+          'uniform sampler2D uAscii;',
+          'uniform sampler2D uHeight;',
+          'uniform vec2 uHeightTexel;',
+          'uniform vec2 uSourceTexel;',
+          'uniform float uCellAspect;',
+          'uniform float uStrength;',
+          'uniform float uMotionMode;',
+          'uniform float uMotionStrength;',
+          'uniform float uColorMode;',
+          'uniform vec2 uGrid;',
+          'uniform float uTime;',
+          'in vec2 vUv;',
+          'out vec4 outColor;',
+          'float heightAt(vec2 uv) {',
+          '  return texture(uHeight, clamp(uv, 0.0, 1.0)).r;',
+          '}',
+          'float cellNoise(vec2 cell) {',
+          '  return fract(sin(dot(cell, vec2(127.1, 311.7))) * 43758.5453123);',
+          '}',
+          'vec3 monochromeTone(float luma, float mode) {',
+          '  float envelope = pow(max(0.0, sin(3.14159265 * clamp(luma, 0.0, 1.0))), 0.72);',
+          '  vec3 tint = vec3(0.0);',
+          '  float chroma = 0.0;',
+          '  if (mode > 1.5 && mode < 2.5) {',
+          '    tint = vec3(-1.0, 0.378, -0.806);',
+          '    chroma = 0.22745;',
+          '  } else if (mode > 2.5 && mode < 3.5) {',
+          '    tint = vec3(0.805, -0.135, -1.0);',
+          '    chroma = 0.24314;',
+          '  } else if (mode > 3.5) {',
+          '    tint = vec3(-0.84, 0.148, 1.0);',
+          '    chroma = 0.23529;',
+          '  }',
+          '  return clamp(vec3(luma) + tint * chroma * envelope, 0.0, 1.0);',
+          '}',
+          'void main() {',
+          '  float height = heightAt(vUv);',
+          '  float phase = uTime * 0.0010471975512;',
+          '  float right = heightAt(vUv + vec2(uHeightTexel.x, 0.0));',
+          '  float up = heightAt(vUv + vec2(0.0, uHeightTexel.y));',
+          '  vec2 gradient = vec2(right - height, (up - height) * uCellAspect);',
+          '  float motionScale = clamp(uMotionStrength, 0.0, 1.0);',
+          '  float naturalMode = 1.0 - step(0.5, abs(uMotionMode - 1.0));',
+          '  float particleMode = 1.0 - step(0.5, abs(uMotionMode - 3.0));',
+          '  float codeMode = 1.0 - step(0.5, abs(uMotionMode - 4.0));',
+          '  float effectScale = clamp(motionScale * (1.0 + codeMode * 0.18), 0.0, 1.0);',
+          '  float breathEnabled = max(naturalMode, codeMode);',
+          '  float particleEnabled = max(max(naturalMode, particleMode), codeMode * 0.42);',
+          '  float codeEnabled = max(naturalMode, codeMode);',
+          '  float baseBreathing = 1.0 + sin(phase + vUv.y * 8.0) * 0.035 * effectScale * breathEnabled;',
+          '  float breathSignal = sin(phase + vUv.y * 5.4 + height * 1.8);',
+          '  float codeBreathSignal = sin(phase + height * 1.6);',
+          '  float breathing = baseBreathing * (1.0 + breathSignal * 0.055 * effectScale * breathEnabled + codeBreathSignal * 0.034 * effectScale * codeMode);',
+          '  float localStrength = breathing;',
+          '  vec2 displacement = gradient * uSourceTexel * uStrength * localStrength;',
+          '  float depthBias = (height - 0.5) * 0.12;',
+          '  displacement += vec2(depthBias, -depthBias * 0.55) * uSourceTexel * uStrength;',
+          '  vec2 displacedUv = clamp(vUv - displacement, uSourceTexel, 1.0 - uSourceTexel);',
+          '  vec4 color = texture(uAscii, displacedUv);',
+          '  float colorLuma = dot(color.rgb, vec3(0.2126, 0.7152, 0.0722));',
+          '  float highlightGuard = 1.0 - smoothstep(0.62, 0.96, colorLuma) * 0.72;',
+          '  color.rgb *= 1.0 + (breathSignal * 0.09 * breathEnabled + codeBreathSignal * 0.07 * codeMode) * effectScale * highlightGuard;',
+          '  vec2 motionCell = floor(vUv * max(uGrid, vec2(1.0)));',
+          '  float seed = cellNoise(motionCell);',
+          '  float particlePulse = pow(max(0.0, sin(phase * 2.0 + seed * 39.0)), 7.0);',
+          '  float particleGate = step(0.61, cellNoise(motionCell + vec2(19.7, 7.3)));',
+          '  float inkMask = smoothstep(0.018, 0.22, colorLuma);',
+          '  color.rgb += vec3(1.0, 0.91, 0.70) * particlePulse * particleGate * particleEnabled * effectScale * inkMask * highlightGuard * 0.33;',
+          '  float codeCurve = sin(vUv.y * 8.0 - phase) * codeMode * 1.15;',
+          '  float codeWave = 0.5 + 0.5 * sin(vUv.y * 31.0 + vUv.x * 10.0 + codeCurve - phase * (1.0 + codeMode));',
+          '  float ribbonPower = 15.0 - codeMode * 6.0;',
+          '  float codeBreathEnvelope = 1.0 - codeMode * 0.42 + (0.5 + 0.5 * codeBreathSignal) * codeMode * 0.42;',
+          '  float codeRibbon = pow(codeWave, ribbonPower) * (0.42 + seed * 0.58) * codeBreathEnvelope;',
+          '  vec3 ribbonColor = mix(color.rgb, vec3(1.0, 0.93, 0.78), 0.62);',
+          '  color.rgb += ribbonColor * codeRibbon * codeEnabled * effectScale * inkMask * highlightGuard * (0.22 + codeMode * 0.10);',
+          '  float finalLuma = dot(color.rgb, vec3(0.2126, 0.7152, 0.0722));',
+          '  if (uColorMode > 0.5) color.rgb = monochromeTone(finalLuma, uColorMode);',
+          '  outColor = color;',
+          '}'
+        ].join('\n');
+
+        const shaders = [];
+        const compile = (type, source) => {
+          const shader = gl.createShader(type);
+          shaders.push(shader);
+          gl.shaderSource(shader, source);
+          gl.compileShader(shader);
+          if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) {
+            throw new Error(gl.getShaderInfoLog(shader) || 'Shader compilation failed');
+          }
+          return shader;
+        };
+
+        let program;
+        try {
+          program = gl.createProgram();
+          gl.attachShader(program, compile(gl.VERTEX_SHADER, vertexSource));
+          gl.attachShader(program, compile(gl.FRAGMENT_SHADER, fragmentSource));
+          gl.linkProgram(program);
+          if (!gl.getProgramParameter(program, gl.LINK_STATUS)) {
+            throw new Error(gl.getProgramInfoLog(program) || 'Shader linking failed');
+          }
+        } catch (error) {
+          console.warn('Displacement renderer unavailable:', error);
+          if (program) gl.deleteProgram(program);
+          target.style.display = 'none';
+          gl.getExtension('WEBGL_lose_context')?.loseContext();
+          return null;
+        } finally {
+          shaders.forEach((shader) => gl.deleteShader(shader));
+        }
+
+        const vertices = new Float32Array([
+          -1, -1, 0, 0,
+           1, -1, 1, 0,
+          -1,  1, 0, 1,
+           1,  1, 1, 1
+        ]);
+        const vertexArray = gl.createVertexArray();
+        const buffer = gl.createBuffer();
+        gl.bindVertexArray(vertexArray);
+        gl.bindBuffer(gl.ARRAY_BUFFER, buffer);
+        gl.bufferData(gl.ARRAY_BUFFER, vertices, gl.STATIC_DRAW);
+        const stride = 4 * Float32Array.BYTES_PER_ELEMENT;
+        const positionLocation = gl.getAttribLocation(program, 'aPosition');
+        const uvLocation = gl.getAttribLocation(program, 'aUv');
+        gl.enableVertexAttribArray(positionLocation);
+        gl.vertexAttribPointer(positionLocation, 2, gl.FLOAT, false, stride, 0);
+        gl.enableVertexAttribArray(uvLocation);
+        gl.vertexAttribPointer(uvLocation, 2, gl.FLOAT, false, stride, 2 * Float32Array.BYTES_PER_ELEMENT);
+
+        const createTexture = () => {
+          const texture = gl.createTexture();
+          gl.bindTexture(gl.TEXTURE_2D, texture);
+          gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+          gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+          gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+          gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+          return texture;
+        };
+        const asciiTexture = createTexture();
+        const heightTexture = createTexture();
+        const uniforms = {
+          ascii: gl.getUniformLocation(program, 'uAscii'),
+          height: gl.getUniformLocation(program, 'uHeight'),
+          heightTexel: gl.getUniformLocation(program, 'uHeightTexel'),
+          sourceTexel: gl.getUniformLocation(program, 'uSourceTexel'),
+          cellAspect: gl.getUniformLocation(program, 'uCellAspect'),
+          strength: gl.getUniformLocation(program, 'uStrength'),
+          motionMode: gl.getUniformLocation(program, 'uMotionMode'),
+          motionStrength: gl.getUniformLocation(program, 'uMotionStrength'),
+          colorMode: gl.getUniformLocation(program, 'uColorMode'),
+          grid: gl.getUniformLocation(program, 'uGrid'),
+          time: gl.getUniformLocation(program, 'uTime')
+        };
+        let heightWidth = 1;
+        let heightHeight = 1;
+        let ready = false;
+
+        const textureSizes = [];
+        const upload = (unit, texture, source) => {
+          gl.activeTexture(gl.TEXTURE0 + unit);
+          gl.bindTexture(gl.TEXTURE_2D, texture);
+          gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true);
+          const size = `${source.width}x${source.height}`;
+          if (textureSizes[unit] === size) {
+            gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, gl.RGBA, gl.UNSIGNED_BYTE, source);
+          } else {
+            gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, source);
+            textureSizes[unit] = size;
+          }
+        };
+
+        return {
+          resize(width, height) {
+            if (target.width !== width || target.height !== height) {
+              target.width = width;
+              target.height = height;
+            }
+            gl.viewport(0, 0, width, height);
+          },
+          updateTextures(asciiSource, heightSource) {
+            upload(0, asciiTexture, asciiSource);
+            upload(1, heightTexture, heightSource);
+            heightWidth = Math.max(1, heightSource.width);
+            heightHeight = Math.max(1, heightSource.height);
+            ready = true;
+          },
+          updateAsciiTexture(asciiSource) {
+            upload(0, asciiTexture, asciiSource);
+          },
+          render(time, strength, dpr, cellAspect, motionMode, motionStrength, colorMode) {
+            if (!ready) return;
+            if (gl.isContextLost()) throw new Error('Graphics context lost');
+            gl.useProgram(program);
+            gl.bindVertexArray(vertexArray);
+            gl.uniform1i(uniforms.ascii, 0);
+            gl.uniform1i(uniforms.height, 1);
+            gl.uniform2f(uniforms.heightTexel, 1 / heightWidth, 1 / heightHeight);
+            gl.uniform2f(uniforms.sourceTexel, 1 / target.width, 1 / target.height);
+            gl.uniform1f(uniforms.cellAspect, cellAspect);
+            gl.uniform1f(uniforms.strength, strength * dpr);
+            gl.uniform1f(uniforms.motionMode, motionMode);
+            gl.uniform1f(uniforms.motionStrength, motionStrength / 100);
+            gl.uniform1f(uniforms.colorMode, colorMode);
+            gl.uniform2f(uniforms.grid, heightWidth, heightHeight);
+            gl.uniform1f(uniforms.time, loopTime(time));
+            gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+          },
+          dispose() {
+            ready = false;
+            gl.deleteTexture(asciiTexture);
+            gl.deleteTexture(heightTexture);
+            gl.deleteBuffer(buffer);
+            gl.deleteVertexArray(vertexArray);
+            gl.deleteProgram(program);
+            gl.getExtension('WEBGL_lose_context')?.loseContext();
+          }
+        };
+      }
+
+      const warpModes = [
+        { labelKey: 'off', strength: 0 },
+        { labelKey: 'warpSubtle', strength: 9 },
+        { labelKey: 'warpDefined', strength: 17 },
+        { labelKey: 'warpExtreme', strength: 30 }
+      ];
+      const motionModes = [
+        { labelKey: 'motionCode', value: 1 },
+        { labelKey: 'motionParticles', value: 3 },
+        { labelKey: 'motionTide', value: 4 },
+        { labelKey: 'off', value: 0 }
+      ];
+      const backgroundModes = [
+        { labelKey: 'backgroundArt', mode: 'art' },
+        { labelKey: 'backgroundBlack', mode: 'black' },
+        { labelKey: 'backgroundOriginal', mode: 'original' }
+      ];
+      const colorModes = [
+        { labelKey: 'colorOriginal', mode: 'color' },
+        { labelKey: 'colorMono', mode: 'neutral', tint: [0, 0, 0], chroma: 0 },
+        { labelKey: 'colorGreen', mode: 'green', tint: [-1, 0.378, -0.806], chroma: 58 },
+        { labelKey: 'colorOrange', mode: 'orange', tint: [0.805, -0.135, -1], chroma: 62 },
+        { labelKey: 'colorBlue', mode: 'blue', tint: [-0.84, 0.148, 1], chroma: 60 }
+      ];
+      function applyColorMode(red, green, blue, modeIndex) {
+        const mode = colorModes[modeIndex];
+        if (mode.mode === 'color') return { red, green, blue };
+
+        const luma = 0.2126 * red + 0.7152 * green + 0.0722 * blue;
+        const envelope = Math.pow(Math.max(0, Math.sin(Math.PI * clamp(luma / 255))), 0.72);
+        return {
+          red: clamp(luma + mode.tint[0] * mode.chroma * envelope, 0, 255),
+          green: clamp(luma + mode.tint[1] * mode.chroma * envelope, 0, 255),
+          blue: clamp(luma + mode.tint[2] * mode.chroma * envelope, 0, 255)
+        };
+      }
+      let warpRenderer = createDisplacementRenderer(warpCanvas);
+
+      // Both palettes run from the lightest mark to the densest glyph. The
+      // 19-level set is more graphic; 27 levels preserve subtler photographic tone.
+      const palettes = [
+        { label: '19', glyphs: ".,:'\"/rcxuasSPARmWB" },
+        { label: '27', glyphs: ".,'\"/rtzxYyausSA4KU8RmDNBWM" }
+      ];
+      let glyphs = palettes[0].glyphs;
+      let motionSampleSource = null;
+      let motionCandidates = [];
+      let animatedTextureActive = false;
+      const reducedMotionQuery = matchMedia('(prefers-reduced-motion: reduce)');
+
+      const state = {
+        image: null,
+        demoMode: false,
+        demoId: null,
+        pendingDemoId: null,
+        imageRequestPending: false,
+        previewMode: 'ascii',
+        samples: [],
+        gridSize: 8,
+        paletteIndex: 0,
+        colorModeIndex: 0,
+        contrast: -12,
+        temperature: 0,
+        tint: 0,
+        warpIndex: embedMode ? 3 : 2,
+        motionIndex: 0,
+        motionStrength: 82,
+        motionOverride: false,
+        width: 0,
+        height: 0,
+        artworkWidth: 900,
+        artworkHeight: 1200,
+        dpr: 1,
+        reducedMotion: reducedMotionQuery.matches,
+        lastSampleKey: '',
+        backgroundModeIndex: 0,
+        backgroundBeforeDemo: null,
+        segmentation: null,
+        analysisVersion: 0,
+        analysisToken: 0,
+        decodeToken: 0,
+        storageEpoch: 0,
+        analyzing: false,
+        processorTimer: 0,
+        processorGeneration: 0,
+        processorFinishing: null,
+        processorStep: 0,
+        sessionSaveTimer: 0,
+        columns: 0,
+        rows: 0,
+        frozenPreset: false,
+        isIntersecting: true,
+        staticReady: false,
+        framePending: false,
+        frameRequest: 0,
+        lastFrameTime: 0
+      };
+
+      function setDemoGalleryOpen(open) {
+        demoGallery.hidden = !open;
+        intro.classList.toggle('is-browsing-demos', open);
+        demoButton.setAttribute('aria-expanded', String(open));
+        demoButton.textContent = t(open ? 'demoBack' : 'tryDemo');
+      }
+
+      function syncSourceControls() {
+        const isOriginal = state.previewMode === 'original';
+        originalViewButton.setAttribute('aria-pressed', String(isOriginal));
+        asciiViewButton.setAttribute('aria-pressed', String(!isOriginal));
+        originalViewButton.disabled = !state.image || state.imageRequestPending;
+        asciiViewButton.disabled = (!state.image && !state.frozenPreset) || state.imageRequestPending;
+        sourceModeLabel.textContent = t(isOriginal ? 'sourceModeOriginal' : 'sourceModeAscii');
+        const activeDemo = demoPortraits.find((demo) => demo.id === state.demoId);
+        sourceCaption.textContent = state.imageRequestPending
+          ? t('sourceCaptionLoading')
+          : activeDemo
+            ? t('sourceCaptionDemo', { subjectKey: activeDemo.labelKey })
+            : t(state.demoMode ? 'sourceCaptionDemoGeneric' : state.image ? 'sourceCaptionPhoto' : state.frozenPreset ? 'sourceCaptionPreset' : 'sourceCaptionEmpty');
+        demoSelect.value = (state.imageRequestPending ? state.pendingDemoId : state.demoId) || '';
+        demoGrid.setAttribute('aria-busy', String(state.imageRequestPending));
+        demoGrid.querySelectorAll('[data-demo-id]').forEach((button) => {
+          button.setAttribute('aria-pressed', String(button.dataset.demoId === state.demoId));
+        });
+        window.StudioSelects?.sync();
+      }
+
+      function drawOriginalPreview() {
+        if (!state.image) return;
+        sourcePreview.width = canvas.width;
+        sourcePreview.height = canvas.height;
+        // This is the very same prepared source sampled by rebuildSamples, not
+        // a screenshot or a second image decode. Fit it without cropping.
+        const scale = Math.min(sourcePreview.width / state.image.width,
+          sourcePreview.height / state.image.height);
+        const width = state.image.width * scale;
+        const height = state.image.height * scale;
+        sourcePreviewCtx.drawImage(state.image,
+          (sourcePreview.width - width) / 2, (sourcePreview.height - height) / 2, width, height);
+      }
+
+      function setPreviewMode(mode) {
+        if (mode !== 'ascii' && mode !== 'original') return false;
+        if (mode === 'original' && (!state.image || state.imageRequestPending)) return false;
+        state.previewMode = mode;
+        sourcePreview.hidden = mode !== 'original';
+        document.body.classList.toggle('is-source-view', mode === 'original');
+        if (mode === 'original') {
+          drawOriginalPreview();
+          if (state.staticReady) stopRenderLoop();
+        } else {
+          requestRender();
+        }
+        syncSourceControls();
+        return true;
+      }
+
+      function scheduleSessionSave() {
+        if (embedMode || !state.image || state.demoMode) return;
+        clearTimeout(state.sessionSaveTimer);
+        const epoch = state.storageEpoch;
+        const sourceToken = state.decodeToken;
+        state.sessionSaveTimer = setTimeout(() => {
+          saveSessionSettings(captureSettings(), epoch, sourceToken).catch((error) => {
+            console.warn('Portrait settings could not be saved:', error);
+            if (epoch === state.storageEpoch && sourceToken === state.decodeToken) storageWarning.hidden = false;
+          });
+        }, 260);
+      }
+
+      function validateAssetPreset(preset) {
+        const positiveInteger = (value, maximum) =>
+          Number.isInteger(value) && value > 0 && value <= maximum;
+        const optionIndex = (value, options) =>
+          Number.isInteger(value) && value >= 0 && value < options.length;
+        const validMotionIndex = preset?.version === 1
+          ? Number.isInteger(preset.motionIndex) && preset.motionIndex >= 0 && preset.motionIndex <= 4
+          : optionIndex(preset?.motionIndex, motionModes);
+        if (!preset || (preset.version !== 1 && preset.version !== 2) ||
+            !positiveInteger(preset.width, 4096) ||
+            !positiveInteger(preset.height, 4096) ||
+            !positiveInteger(preset.columns, 512) ||
+            !positiveInteger(preset.rows, 512) ||
+            preset.columns * preset.rows > 100000 ||
+            !Array.isArray(preset.samples) ||
+            preset.samples.length !== preset.columns * preset.rows ||
+            !Number.isFinite(preset.gridSize) || preset.gridSize < 2 || preset.gridSize > 64 ||
+            !optionIndex(preset.paletteIndex, palettes) ||
+            !optionIndex(preset.colorModeIndex, colorModes) ||
+            !optionIndex(preset.warpIndex, warpModes) ||
+            !validMotionIndex ||
+            !optionIndex(preset.backgroundModeIndex, backgroundModes) ||
+            !Number.isFinite(preset.contrast) || Math.abs(preset.contrast) > 100 ||
+            !Number.isFinite(preset.temperature) || Math.abs(preset.temperature) > 100 ||
+            !Number.isFinite(preset.tint) || Math.abs(preset.tint) > 100 ||
+            !Number.isFinite(preset.motionStrength) || preset.motionStrength < 0 || preset.motionStrength > 100 ||
+            (preset.glyphs !== undefined && typeof preset.glyphs !== 'string')) {
+          return false;
+        }
+
+        const presetGlyphs = typeof preset.glyphs === 'string'
+          ? preset.glyphs
+          : palettes[preset.paletteIndex].glyphs;
+        if (!presetGlyphs.length || presetGlyphs.length > 128) return false;
+        const unitFields = ['foregroundWeight', 'luma', 'height', 'lightness', 'ink', 'baseAlpha', 'maskAlpha'];
+        const colorFields = ['r', 'g', 'b', 'baseRed', 'baseGreen', 'baseBlue'];
+
+        return preset.samples.every((point, index) => {
+          const expectedX = index % preset.columns;
+          const expectedY = Math.floor(index / preset.columns);
+          return point &&
+            point.gridX === expectedX && point.gridY === expectedY &&
+            Number.isFinite(point.x) && point.x >= 0 && point.x <= preset.width + preset.gridSize &&
+            Number.isFinite(point.y) && point.y >= 0 && point.y <= preset.height + preset.gridSize * 1.5 &&
+            Number.isInteger(point.glyphIndex) && point.glyphIndex >= 0 && point.glyphIndex < presetGlyphs.length &&
+            typeof point.glyph === 'string' && point.glyph.length > 0 && point.glyph.length <= 8 &&
+            typeof point.isArtBackground === 'boolean' &&
+            unitFields.every((field) => Number.isFinite(point[field]) && point[field] >= 0 && point[field] <= 1) &&
+            colorFields.every((field) => Number.isFinite(point[field]) && point[field] >= 0 && point[field] <= 255);
+        });
+      }
+
+      function syncControls() {
+        gridRange.value = String(state.gridSize);
+        gridValue.value = state.gridSize.toFixed(1);
+        levelsSelect.value = String(state.paletteIndex);
+        colorSelect.value = String(state.colorModeIndex);
+        contrastRange.value = String(state.contrast);
+        contrastValue.value = formatSigned(state.contrast);
+        temperatureRange.value = String(state.temperature);
+        temperatureValue.value = formatSigned(state.temperature);
+        tintRange.value = String(state.tint);
+        tintValue.value = formatSigned(state.tint);
+        warpSelect.value = String(state.warpIndex);
+        motionSelect.value = String(state.motionIndex);
+        motionStrengthRange.value = String(state.motionStrength);
+        motionStrengthValue.value = String(state.motionStrength);
+        backgroundSelect.value = String(state.backgroundModeIndex);
+        levelLabel.textContent = t('levelLabel', { levels: glyphs.length });
+        window.StudioSelects?.sync();
+      }
+
+      function applyAssetPreset(preset) {
+        if (!validateAssetPreset(preset)) {
+          console.warn('Rejected an invalid ASCII portrait preset.');
+          return false;
+        }
+
+        state.artworkWidth = preset.width;
+        state.artworkHeight = preset.height;
+        state.gridSize = preset.gridSize;
+        state.paletteIndex = preset.paletteIndex;
+        state.colorModeIndex = preset.colorModeIndex;
+        state.contrast = preset.contrast;
+        state.temperature = preset.temperature;
+        state.tint = preset.tint;
+        state.warpIndex = preset.warpIndex;
+        // Version 1 included a separate breathing mode. Map legacy indices to
+        // the leaner version 2 list without changing existing frozen portraits.
+        state.motionIndex = preset.version === 1
+          ? [0, 0, 1, 2, 3][preset.motionIndex]
+          : preset.motionIndex;
+        state.motionStrength = preset.motionStrength;
+        state.backgroundModeIndex = preset.backgroundModeIndex;
+        state.backgroundBeforeDemo = null;
+        glyphs = preset.glyphs || palettes[state.paletteIndex].glyphs;
+
+        syncControls();
+
+        state.image = null;
+        state.demoMode = false;
+        state.demoId = null;
+        state.imageRequestPending = false;
+        state.pendingDemoId = null;
+        state.segmentation = null;
+        state.samples = preset.samples;
+        state.columns = preset.columns;
+        state.rows = preset.rows;
+        state.frozenPreset = true;
+        setPreviewMode('ascii');
+        sourcePreviewCtx.clearRect(0, 0, sourcePreview.width, sourcePreview.height);
+        motionSampleSource = null;
+        motionCandidates = [];
+        resize();
+        rebuildHeightTexture(state.samples, state.columns, state.rows);
+        renderStaticPortrait();
+        state.lastSampleKey = `frozen:${preset.capturedAt || 0}`;
+        intro.classList.add('is-hidden');
+        setStatus('statusFixedAsset', { columns: state.columns, rows: state.rows });
+        notifyHost('ready');
+        requestRender();
+        return true;
+      }
+
+      if (!warpRenderer) {
+        warpSelect.disabled = true;
+        motionSelect.disabled = true;
+        motionStrengthRange.disabled = true;
+      } else if (state.reducedMotion) {
+        state.motionIndex = motionModes.findIndex((mode) => mode.value === 0);
+        motionSelect.value = String(state.motionIndex);
+      }
+
+      function setStatus(key, values = {}) {
+        statusMessage = { key, values };
+        status.textContent = t(key, values);
+        status.classList.toggle('is-error', key.endsWith('Failed') || key === 'statusGpuFallback');
+        if (key.endsWith('Failed')) notifyHost('error');
+      }
+
+      function notifyHost(type) {
+        if (!embedMode || window.parent === window) return;
+        window.parent.postMessage({
+          channel: 'ascii-portrait', type,
+          width: state.artworkWidth, height: state.artworkHeight
+        }, '*'); // Geometry/status only. Hosts must verify event.source and event.origin.
+      }
+
+      function buildLoaderPortrait(image) {
+        const columns = 48;
+        const rows = 38;
+        loaderSampleCanvas.width = columns;
+        loaderSampleCanvas.height = rows;
+        loaderSampleCtx.clearRect(0, 0, columns, rows);
+        const loaderCellX = 0.62;
+        const loaderCellY = 0.92;
+        const rect = gridCoverRect(
+          image.width,
+          image.height,
+          columns * loaderCellX,
+          rows * loaderCellY,
+          loaderCellX,
+          loaderCellY
+        );
+        loaderSampleCtx.drawImage(image, rect.x, rect.y, rect.width, rect.height);
+        const pixels = loaderSampleCtx.getImageData(0, 0, columns, rows).data;
+        const lines = [];
+        for (let y = 0; y < rows; y++) {
+          let row = '';
+          for (let x = 0; x < columns; x++) {
+            const index = (y * columns + x) * 4;
+            const luma = (
+              pixels[index] * 0.2126 +
+              pixels[index + 1] * 0.7152 +
+              pixels[index + 2] * 0.0722
+            ) / 255;
+            const lightness = Math.max(0, Math.min(1, (luma - 0.5) * 1.24 + 0.5));
+            row += glyphs[Math.round(lightness * (glyphs.length - 1))];
+          }
+          lines.push(row);
+        }
+        loaderAscii.textContent = lines.join('\n');
+      }
+
+      function updateProcessor(key, step, values = {}) {
+        // These are real processing stages, not an invented download percentage.
+        const currentStep = Math.max(state.processorStep, Math.min(4, Math.max(1, step)));
+        state.processorStep = currentStep;
+        if (currentStep > 1) processor.classList.remove('is-starting');
+        processorMessage = { key, values };
+        processorStage.textContent = t(key, values);
+        processorStepCount.textContent = `${String(currentStep).padStart(2, '0')} / 04`;
+        processorBar.style.transform = `scaleX(${(currentStep - 1) / 4})`;
+        processorActivity.style.transform = `translateX(${(currentStep - 1) * 100}%)`;
+        processorProgress.removeAttribute('aria-valuenow');
+        processorSteps.forEach((element, index) => {
+          element.classList.toggle('is-current', index === currentStep - 1);
+          element.classList.toggle('is-done', index < currentStep - 1);
+        });
+      }
+
+      function dismissProcessor() {
+        state.processorGeneration += 1;
+        state.processorFinishing = null;
+        clearTimeout(state.processorTimer);
+        processor.classList.remove('is-active', 'is-complete', 'is-starting');
+        processor.setAttribute('aria-hidden', 'true');
+        controlPanel.inert = false;
+        intro.inert = false;
+        skipAnalysisButton.disabled = false;
+      }
+
+      function showProcessor(image) {
+        dismissProcessor();
+        state.processorStep = 0;
+        processor.classList.add('is-starting');
+        stopRenderLoop();
+        buildLoaderPortrait(image);
+        updateProcessor('processorRead', 1);
+        processor.classList.add('is-active');
+        processor.setAttribute('aria-hidden', 'false');
+        controlPanel.inert = true;
+        intro.inert = true;
+        skipAnalysisButton.focus({ preventScroll: true });
+      }
+
+      function beginProcessorRender(key = 'processorPortraitComplete') {
+        state.processorFinishing = key;
+        updateProcessor('processorRender', 4);
+        skipAnalysisButton.disabled = true;
+        requestRender();
+      }
+
+      function hideProcessor(key = 'processorComplete') {
+        if (!state.staticReady) return;
+        state.processorFinishing = null;
+        updateProcessor(key, 4);
+        processor.classList.add('is-complete');
+        processorStepCount.textContent = t('processorDone');
+        processorBar.style.transform = 'scaleX(1)';
+        processorProgress.setAttribute('aria-valuenow', '4');
+        processorSteps.forEach((element) => {
+          element.classList.remove('is-current');
+          element.classList.add('is-done');
+        });
+        clearTimeout(state.processorTimer);
+        const generation = state.processorGeneration;
+        state.processorTimer = setTimeout(() => {
+          if (generation !== state.processorGeneration) return;
+          const returnFocus = document.activeElement === skipAnalysisButton;
+          dismissProcessor();
+          if (returnFocus) downloadButton.focus({ preventScroll: true });
+        }, state.reducedMotion ? 0 : 260);
+      }
+
+      function skipPortraitAnalysis() {
+        if (!state.analyzing) return;
+        state.analysisToken += 1;
+        state.analyzing = false;
+        state.segmentation = null;
+        state.backgroundModeIndex = backgroundModes.findIndex((mode) => mode.mode === 'original');
+        syncControls();
+        state.lastSampleKey = '';
+        state.staticReady = false;
+        scheduleSessionSave();
+        beginProcessorRender('processorBasicMode');
+      }
+
+      skipAnalysisButton.addEventListener('click', skipPortraitAnalysis);
+
+      function prepareInferenceImage(image) {
+        // The segmentation mask is sampled by a much coarser ASCII grid, so a
+        // 576 px inference edge preserves contours while substantially reducing
+        // model time and GPU pressure on high-resolution phone photos.
+        const maxSide = 576;
+        const scale = Math.min(1, maxSide / Math.max(image.width, image.height));
+        inferenceCanvas.width = Math.max(1, Math.round(image.width * scale));
+        inferenceCanvas.height = Math.max(1, Math.round(image.height * scale));
+        inferenceCtx.clearRect(0, 0, inferenceCanvas.width, inferenceCanvas.height);
+        inferenceCtx.drawImage(image, 0, 0, inferenceCanvas.width, inferenceCanvas.height);
+        return inferenceCanvas;
+      }
+
+      async function analyzePortrait(image) {
+        const token = ++state.analysisToken;
+        let segmentations = [];
+        state.analyzing = true;
+        state.segmentation = null;
+        state.analysisVersion += 1;
+        state.lastSampleKey = '';
+        state.staticReady = false;
+        setStatus('statusAnalyzing');
+
+        try {
+          showProcessor(image);
+          await yieldToBrowser();
+          if (token !== state.analysisToken) return;
+          updateProcessor('processorLoadSegmentation', 2);
+          const segmenter = await withTimeout(getPortraitSegmenter(), 25000);
+          if (token !== state.analysisToken) return;
+          updateProcessor('processorSeparate', 3);
+          await yieldToBrowser();
+          if (token !== state.analysisToken) return;
+          segmentations = await withTimeout(queuePortraitSegmentation(segmenter, image, token), 20000,
+            (lateResults) => (lateResults || []).forEach((result) => result.mask?.dispose?.()));
+          if (!segmentations || token !== state.analysisToken) return;
+          if (!segmentations[0]?.mask) throw new Error('Portrait segmentation returned no mask.');
+          updateProcessor('processorAnalyze', 4);
+          const maskImage = await segmentations[0].mask.toImageData();
+          if (token !== state.analysisToken) return;
+          const maskData = new Float32Array(maskImage.width * maskImage.height);
+          const chunkSize = 65536;
+          for (let start = 0; start < maskData.length; start += chunkSize) {
+            const end = Math.min(maskData.length, start + chunkSize);
+            for (let i = start; i < end; i++) {
+              maskData[i] = maskImage.data[i * 4 + 3] / 255;
+            }
+            if (end < maskData.length) await yieldToBrowser();
+            if (token !== state.analysisToken) return;
+          }
+          if (token !== state.analysisToken) return;
+          state.segmentation = {
+            data: maskData,
+            width: maskImage.width,
+            height: maskImage.height
+          };
+          backgroundSelect.value = String(state.backgroundModeIndex);
+          state.analysisVersion += 1;
+          state.lastSampleKey = '';
+          state.staticReady = false;
+          setStatus('statusSegReady', { levels: glyphs.length });
+          beginProcessorRender('processorPortraitComplete');
+        } catch (error) {
+          console.warn('Portrait analysis fallback:', error);
+          if (token === state.analysisToken) {
+            setStatus(state.segmentation
+              ? 'statusSegFallbackSeparated'
+              : 'statusSegFallbackBasic');
+            beginProcessorRender(state.segmentation
+              ? 'processorSeparationComplete'
+              : 'processorBasicMode');
+          }
+        } finally {
+          (segmentations || []).forEach((segmentation) => segmentation.mask?.dispose?.());
+          if (token === state.analysisToken) {
+            state.analyzing = false;
+            state.lastSampleKey = '';
+            state.staticReady = false;
+            requestRender();
+          }
+        }
+      }
+
+      function fieldSample(field, gridX, gridY, rect) {
+        if (!field) return null;
+        const u = (gridX + 0.5 - rect.x) / rect.width;
+        const v = (gridY + 0.5 - rect.y) / rect.height;
+        if (u < 0 || u > 1 || v < 0 || v > 1) return 0;
+        const x = Math.max(0, Math.min(field.width - 1, Math.round(u * (field.width - 1))));
+        const y = Math.max(0, Math.min(field.height - 1, Math.round(v * (field.height - 1))));
+        return field.data[y * field.width + x];
+      }
+
+      function resize() {
+        const nextWidth = state.artworkWidth;
+        const nextHeight = state.artworkHeight;
+        // Screen size affects only the presentation, never the character matrix.
+        const dpr = Math.min(1.5, Math.sqrt(MAX_WORK_PIXELS / (nextWidth * nextHeight)));
+        const compactLayout = innerWidth <= 740;
+        const panelRect = controlPanel.getBoundingClientRect();
+        const availableWidth = embedMode
+          ? innerWidth
+          : compactLayout
+            ? innerWidth
+            : Math.max(320, Math.floor(panelRect.left - 18));
+        const availableHeight = embedMode
+          ? innerHeight
+          : compactLayout
+            ? Math.max(1, Math.floor(panelRect.top - 10))
+            : innerHeight;
+        const pixelWidth = Math.max(1, Math.floor(nextWidth * dpr));
+        const pixelHeight = Math.max(1, Math.floor(nextHeight * dpr));
+        const sizeChanged = canvas.width !== pixelWidth || canvas.height !== pixelHeight;
+        state.width = nextWidth;
+        state.height = nextHeight;
+        state.dpr = dpr;
+        const scale = Math.min(availableWidth / nextWidth, availableHeight / nextHeight);
+        for (const layer of [canvas, warpCanvas, sourcePreview]) {
+          layer.style.width = `${nextWidth * scale}px`;
+          layer.style.height = `${nextHeight * scale}px`;
+          layer.style.left = `${(availableWidth - nextWidth * scale) / 2}px`;
+          layer.style.top = `${(availableHeight - nextHeight * scale) / 2}px`;
+        }
+        if (!sizeChanged) return;
+
+        canvas.width = pixelWidth;
+        canvas.height = pixelHeight;
+        if (state.previewMode === 'original') drawOriginalPreview();
+        staticCanvas.width = canvas.width;
+        staticCanvas.height = canvas.height;
+        animatedCanvas.width = canvas.width;
+        animatedCanvas.height = canvas.height;
+        glowCanvas.width = canvas.width;
+        glowCanvas.height = canvas.height;
+        const warpDpr = dpr;
+        warpRenderer?.resize(
+          Math.max(1, Math.floor(state.width * warpDpr)),
+          Math.max(1, Math.floor(state.height * warpDpr))
+        );
+        ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+        if (state.frozenPreset && state.samples.length) {
+          rebuildHeightTexture(state.samples, state.columns, state.rows);
+          renderStaticPortrait();
+        } else {
+          state.lastSampleKey = '';
+          state.staticReady = false;
+        }
+        requestRender();
+      }
+
+      function coverRect(sourceWidth, sourceHeight, targetWidth, targetHeight) {
+        const scale = Math.max(targetWidth / sourceWidth, targetHeight / sourceHeight);
+        const width = sourceWidth * scale;
+        const height = sourceHeight * scale;
+        return {
+          x: (targetWidth - width) * 0.5,
+          y: (targetHeight - height) * 0.5,
+          width,
+          height
+        };
+      }
+
+      function gridCoverRect(
+        sourceWidth,
+        sourceHeight,
+        displayWidth,
+        displayHeight,
+        cellWidth,
+        cellHeight
+      ) {
+        const displayRect = coverRect(
+          sourceWidth,
+          sourceHeight,
+          displayWidth,
+          displayHeight
+        );
+        return {
+          x: displayRect.x / cellWidth,
+          y: displayRect.y / cellHeight,
+          width: displayRect.width / cellWidth,
+          height: displayRect.height / cellHeight
+        };
+      }
+
+      function rebuildHeightTexture(samples, columns, rows) {
+        heightCanvas.width = columns;
+        heightCanvas.height = rows;
+        const heightImage = heightCtx.createImageData(columns, rows);
+        for (let index = 0; index < samples.length; index++) {
+          const value = Math.round(clamp(samples[index].height) * 255);
+          const offset = index * 4;
+          heightImage.data[offset] = value;
+          heightImage.data[offset + 1] = value;
+          heightImage.data[offset + 2] = value;
+          heightImage.data[offset + 3] = 255;
+        }
+        heightCtx.putImageData(heightImage, 0, 0);
+      }
+
+      function rebuildSamples() {
+        if (!state.image) return;
+
+        const { cellX, cellY } = getGridMetrics();
+        const columns = Math.ceil(state.width / cellX);
+        const rows = Math.ceil(state.height / cellY);
+        const backgroundMode = backgroundModes[state.backgroundModeIndex].mode;
+        const key = `${columns}:${rows}:${state.gridSize}:${state.image.width}:${state.image.height}:${state.analysisVersion}:${state.backgroundModeIndex}:${state.paletteIndex}:${state.colorModeIndex}:${state.contrast}:${state.temperature}:${state.tint}`;
+        if (key === state.lastSampleKey) return;
+
+        sampleCanvas.width = columns;
+        sampleCanvas.height = rows;
+        sampleCtx.clearRect(0, 0, columns, rows);
+
+        // The source must be fitted in CSS-pixel space before converting the
+        // rectangle into grid coordinates. Using columns/rows directly would
+        // stretch the portrait because character cells are not square.
+        const rect = gridCoverRect(
+          state.image.width,
+          state.image.height,
+          state.width,
+          state.height,
+          cellX,
+          cellY
+        );
+        sampleCtx.drawImage(state.image, rect.x, rect.y, rect.width, rect.height);
+        const pixels = sampleCtx.getImageData(0, 0, columns, rows).data;
+        const rawSamples = [];
+
+        for (let y = 0; y < rows; y++) {
+          for (let x = 0; x < columns; x++) {
+            const index = (y * columns + x) * 4;
+            const r = pixels[index];
+            const g = pixels[index + 1];
+            const b = pixels[index + 2];
+            const luma = (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255;
+            const segmentedValue = fieldSample(state.segmentation, x, y, rect);
+            rawSamples.push({
+              x, y, r, g, b, luma,
+              subject: segmentedValue == null ? 1 : segmentedValue
+            });
+          }
+        }
+
+        // Auto-level the portrait itself rather than applying one fixed curve to
+        // every photograph. Percentile endpoints ignore isolated specular pixels
+        // and deep noise, ensuring the subject uses the full character palette.
+        const subjectLumas = rawSamples
+          .filter((point) => backgroundMode === 'original' ||
+            !state.segmentation || point.subject > 0.22)
+          .map((point) => point.luma)
+          .sort((a, b) => a - b);
+        const percentile = (values, amount) => {
+          if (!values.length) return amount;
+          const index = Math.max(0, Math.min(values.length - 1,
+            Math.round((values.length - 1) * amount)
+          ));
+          return values[index];
+        };
+        const blackPoint = percentile(subjectLumas, 0.025);
+        // Use a conservative white point so a broad highlight area does not
+        // collapse into pure white. Only the brightest 0.5% may clip.
+        const whitePoint = percentile(subjectLumas, 0.995);
+        const tonalRange = Math.max(0.16, whitePoint - blackPoint);
+        for (const point of rawSamples) {
+          point.toneLuma = Math.max(0, Math.min(1,
+            (point.luma - blackPoint) / tonalRange
+          ));
+        }
+
+        const rawAt = (x, y) => {
+          const safeX = Math.max(0, Math.min(columns - 1, x));
+          const safeY = Math.max(0, Math.min(rows - 1, y));
+          return rawSamples[safeY * columns + safeX];
+        };
+        const lumaAt = (x, y) => rawAt(x, y).toneLuma;
+        const subjectAt = (x, y) => rawAt(x, y).subject;
+        const contrastAmount = 1 + state.contrast * 0.0032;
+
+        // Every output mark remains at the center of its own fixed 2D cell.
+        // A small luminance blur suppresses pixel noise; local detail is mixed
+        // back in before quantizing the photograph into the selected ink palette.
+        const samples = rawSamples.map((point) => {
+          const { x, y } = point;
+          const topLeft = lumaAt(x - 1, y - 1);
+          const top = lumaAt(x, y - 1);
+          const topRight = lumaAt(x + 1, y - 1);
+          const left = lumaAt(x - 1, y);
+          const right = lumaAt(x + 1, y);
+          const bottomLeft = lumaAt(x - 1, y + 1);
+          const bottom = lumaAt(x, y + 1);
+          const bottomRight = lumaAt(x + 1, y + 1);
+          const smooth = (
+            topLeft + topRight + bottomLeft + bottomRight +
+            (top + left + right + bottom) * 2 + point.toneLuma * 4
+          ) / 16;
+          const gradientX = (right - left) * 0.5;
+          const gradientY = (bottom - top) * 0.5;
+          const edgeStrength = Math.min(1, Math.hypot(gradientX, gradientY) * 4.2);
+          const localPit = Math.min(1, Math.max(0, smooth - point.toneLuma) * 5.5);
+          const restored = smooth + (point.toneLuma - smooth) * 1.16;
+          const boundedTone = clamp(restored);
+
+          // Endpoint-preserving contrast avoids the hard clipping produced by
+          // a linear contrast multiplier. A gentle film-style shoulder then
+          // separates pale skin, fabric and reflected light before pure white.
+          const contrasted = applyMidpointContrast(boundedTone, contrastAmount);
+          const shoulderAmount = clamp((contrasted - 0.70) / 0.30);
+          const highlightRolled = contrasted - 0.045 * Math.sin(Math.PI * shoulderAmount);
+          const analyzedTone = Math.pow(highlightRolled, 1.02);
+
+          // Preserve the photograph's exposure. Automatic analysis contributes
+          // only a small amount of local separation, so a naturally pale cheek
+          // is not promoted to paper white merely because it is the local peak.
+          const sourceTone = applyMidpointContrast(point.luma, contrastAmount);
+          const lightness = clamp(sourceTone * 0.80 + analyzedTone * 0.20);
+
+          // The palette is ordered from punctuation to broad, dense letters.
+          // Bright areas therefore move toward P/A/R/m/W while shadows retreat
+          // toward /, r, c and punctuation.
+          const glyphDensity = clamp(
+            lightness + edgeStrength * 0.07 - localPit * 0.055
+          );
+          const printGrain = ((((x * 13 + y * 17) % 29) / 28) - 0.5) * 0.62;
+          const glyphIndex = Math.max(0, Math.min(
+            glyphs.length - 1,
+            Math.round(glyphDensity * (glyphs.length - 1) + printGrain)
+          ));
+
+          const subjectSmooth = (
+            subjectAt(x - 1, y - 1) + subjectAt(x + 1, y - 1) +
+            subjectAt(x - 1, y + 1) + subjectAt(x + 1, y + 1) +
+            (subjectAt(x, y - 1) + subjectAt(x - 1, y) +
+              subjectAt(x + 1, y) + subjectAt(x, y + 1)) * 2 +
+            point.subject * 4
+          ) / 16;
+          const foregroundWeight = state.segmentation
+            ? Math.max(0, Math.min(1, (subjectSmooth - 0.08) / 0.58))
+            : 1;
+          const isArtBackground = backgroundMode === 'art' && foregroundWeight < 0.48;
+          const backgroundCharacters = '/rrttzz';
+          const backgroundGlyph = backgroundCharacters[
+            (x + y * 2 + Math.floor(point.toneLuma * 4)) % backgroundCharacters.length
+          ];
+          const maskAlpha = backgroundMode === 'black' ? foregroundWeight : 1;
+
+          const colorLuma = 0.2126 * point.r + 0.7152 * point.g + 0.0722 * point.b;
+          const colorSaturation = 1;
+          const colorRed = Math.max(0, Math.min(255,
+            colorLuma + (point.r - colorLuma) * colorSaturation
+          ));
+          const colorGreen = Math.max(0, Math.min(255,
+            colorLuma + (point.g - colorLuma) * colorSaturation
+          ));
+          const colorBlue = Math.max(0, Math.min(255,
+            colorLuma + (point.b - colorLuma) * colorSaturation
+          ));
+
+          // Selectively soften yellow rather than desaturating the whole image.
+          // Pure yellows receive up to 14% reduction; orange skin tones receive
+          // only a small fraction, preserving healthy red variation.
+          const yellowPresence = clamp(
+            (Math.min(colorRed, colorGreen) - colorBlue) / 90
+          );
+          const yellowBalance = 1 - clamp(Math.abs(colorRed - colorGreen) / 120);
+          const yellowMask = yellowPresence * (0.35 + yellowBalance * 0.65);
+          const yellowChroma = 1 - yellowMask * 0.14;
+          const balancedColorRed = colorLuma + (colorRed - colorLuma) * yellowChroma;
+          const balancedColorGreen = colorLuma + (colorGreen - colorLuma) * yellowChroma;
+          const balancedColorBlue = colorLuma + (colorBlue - colorLuma) * yellowChroma;
+
+          // Temperature moves along blue <-> amber; tint moves along
+          // green <-> magenta. Luminance is removed again below, so these
+          // controls change chroma without changing the established tone curve.
+          const gradedColorRed = balancedColorRed + state.temperature * 0.68 + state.tint * 0.34;
+          const gradedColorGreen = balancedColorGreen + state.temperature * 0.10 - state.tint * 0.56;
+          const gradedColorBlue = balancedColorBlue - state.temperature * 0.74 + state.tint * 0.34;
+
+          // Keep hue and saturation faithful to the source photograph. The
+          // artistic curve controls luminance only; chroma fades solely at the
+          // black/white endpoints so neutral extremes stay clean.
+          const targetLuma = 255 * lightness;
+          const chromaEnvelope = Math.pow(Math.sin(Math.PI * lightness), 0.72);
+          const originalColorLuma = 0.2126 * gradedColorRed +
+            0.7152 * gradedColorGreen + 0.0722 * gradedColorBlue;
+          const originalChroma = chromaEnvelope;
+          const originalRed = clamp(targetLuma + (gradedColorRed - originalColorLuma) * originalChroma, 0, 255);
+          const originalGreen = clamp(targetLuma + (gradedColorGreen - originalColorLuma) * originalChroma, 0, 255);
+          const originalBlue = clamp(targetLuma + (gradedColorBlue - originalColorLuma) * originalChroma, 0, 255);
+
+          // The distant character field is only a dimmer version of the same
+          // source color, not a separate cool-blue grade.
+          const backgroundColorScale = 0.44;
+          const backgroundRed = originalRed * backgroundColorScale;
+          const backgroundGreen = originalGreen * backgroundColorScale;
+          const backgroundBlue = originalBlue * backgroundColorScale;
+          const foregroundRed = originalRed;
+          const foregroundGreen = originalGreen;
+          const foregroundBlue = originalBlue;
+
+          const gradeMix = backgroundMode === 'art' ? foregroundWeight : 1;
+          const baseRed = backgroundMode === 'original' ? originalRed :
+            backgroundRed + (foregroundRed - backgroundRed) * gradeMix;
+          const baseGreen = backgroundMode === 'original' ? originalGreen :
+            backgroundGreen + (foregroundGreen - backgroundGreen) * gradeMix;
+          const baseBlue = backgroundMode === 'original' ? originalBlue :
+            backgroundBlue + (foregroundBlue - backgroundBlue) * gradeMix;
+          const renderColor = applyColorMode(
+            baseRed,
+            baseGreen,
+            baseBlue,
+            state.colorModeIndex
+          );
+          const backgroundAlpha = 0.27 + point.toneLuma * 0.085;
+          // Keep the portrait nearly opaque at every tone and fully opaque at
+          // both endpoints. Otherwise a nominal RGB white is composited down
+          // to grey before it ever reaches the screen.
+          const foregroundAlpha = 0.96 + Math.abs(lightness - 0.5) * 0.08;
+          const baseAlpha = backgroundMode === 'art'
+            ? backgroundAlpha + (foregroundAlpha - backgroundAlpha) * foregroundWeight
+            : foregroundAlpha;
+
+          return {
+            gridX: point.x,
+            gridY: point.y,
+            x: (point.x + 0.5) * cellX,
+            y: (point.y + 0.5) * cellY,
+            glyph: isArtBackground ? backgroundGlyph : glyphs[glyphIndex],
+            glyphIndex,
+            isArtBackground,
+            foregroundWeight,
+            r: point.r,
+            g: point.g,
+            b: point.b,
+            luma: point.toneLuma,
+            height: backgroundMode === 'art'
+              ? 0.5 + (smooth - 0.5) * (0.28 + foregroundWeight * 0.72)
+              : smooth,
+            lightness,
+            ink: glyphDensity,
+            baseRed: renderColor.red,
+            baseGreen: renderColor.green,
+            baseBlue: renderColor.blue,
+            baseAlpha,
+            maskAlpha
+          };
+        });
+
+        rebuildHeightTexture(samples, columns, rows);
+
+        state.samples = samples;
+        state.columns = columns;
+        state.rows = rows;
+        renderStaticPortrait();
+        // Only cache a completed render. A failed frame must remain retryable
+        // instead of getting stuck behind the same sample key on a black canvas.
+        state.lastSampleKey = key;
+        scheduleSessionSave();
+        setStatus('statusRenderSummary', {
+          columns,
+          rows,
+          grid: state.gridSize.toFixed(1),
+          contrast: formatSigned(state.contrast),
+          levels: glyphs.length,
+          colorKey: colorModes[state.colorModeIndex].labelKey,
+          backgroundKey: backgroundModes[state.backgroundModeIndex].labelKey
+        });
+      }
+
+      function setGlyphFont(targetCtx, renderState = state) {
+        const { fontSize } = getGridMetrics(renderState);
+        targetCtx.font = `600 ${fontSize}px ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace`;
+        targetCtx.textAlign = 'center';
+        targetCtx.textBaseline = 'middle';
+      }
+
+      function paintGlyph(targetCtx, point, glyphIndex, glow = 0, opacityScale = 1,
+          renderState = state, renderGlyphs = glyphs) {
+        const tonedMode = colorModes[renderState.colorModeIndex].mode !== 'color';
+        const red = point.baseRed + (255 - point.baseRed) * glow;
+        const greenTarget = tonedMode ? 255 : 248;
+        const blueTarget = tonedMode ? 255 : 232;
+        const green = point.baseGreen + (greenTarget - point.baseGreen) * glow;
+        const blue = point.baseBlue + (blueTarget - point.baseBlue) * glow;
+        const inkLuminance = 0.2126 * red + 0.7152 * green + 0.0722 * blue;
+        const transparentVisibility = point.isArtBackground
+          ? 0
+          : Math.pow(clamp((inkLuminance - 2) / 36), 0.72);
+        const alpha = Math.min(1, point.baseAlpha + glow * 0.12) *
+          point.maskAlpha * opacityScale *
+          (transparentMode ? transparentVisibility : 1);
+        if (alpha <= 0.001) return;
+        targetCtx.fillStyle = `rgba(${red}, ${green}, ${blue}, ${alpha})`;
+        const character = point.isArtBackground ? point.glyph : renderGlyphs[glyphIndex];
+        targetCtx.fillText(character, point.x, point.y);
+      }
+
+      function renderStaticPortrait() {
+        staticCtx.setTransform(1, 0, 0, 1, 0, 0);
+        if (transparentMode) {
+          staticCtx.clearRect(0, 0, staticCanvas.width, staticCanvas.height);
+        } else {
+          staticCtx.fillStyle = '#000';
+          staticCtx.fillRect(0, 0, staticCanvas.width, staticCanvas.height);
+        }
+
+        glowCtx.setTransform(1, 0, 0, 1, 0, 0);
+        glowCtx.clearRect(0, 0, glowCanvas.width, glowCanvas.height);
+        glowCtx.setTransform(state.dpr, 0, 0, state.dpr, 0, 0);
+        setGlyphFont(glowCtx);
+        for (const point of state.samples) {
+          const highlightGlow = clamp((point.lightness - 0.76) / 0.22);
+          if (point.maskAlpha <= 0.015 || point.foregroundWeight <= 0.12 || highlightGlow <= 0.01) continue;
+          paintGlyph(
+            glowCtx,
+            point,
+            point.glyphIndex,
+            0.035,
+            point.foregroundWeight * highlightGlow * 0.32
+          );
+        }
+        glowCtx.setTransform(1, 0, 0, 1, 0, 0);
+
+        staticCtx.globalAlpha = 0.18;
+        staticCtx.filter = `blur(${Math.max(2, state.dpr * 2.4)}px)`;
+        staticCtx.drawImage(glowCanvas, 0, 0);
+        staticCtx.filter = 'none';
+        staticCtx.globalAlpha = 1;
+        staticCtx.setTransform(state.dpr, 0, 0, state.dpr, 0, 0);
+        setGlyphFont(staticCtx);
+
+        for (const point of state.samples) {
+          if (point.maskAlpha <= 0.015) continue;
+          paintGlyph(staticCtx, point, point.glyphIndex);
+        }
+
+        staticCtx.setTransform(1, 0, 0, 1, 0, 0);
+        state.staticReady = true;
+        warpRenderer?.updateTextures(staticCanvas, heightCanvas);
+        animatedTextureActive = false;
+      }
+
+      function motionSeed(x, y, salt = 0) {
+        const value = Math.sin(x * 127.1 + y * 311.7 + salt * 74.7) * 43758.5453;
+        return value - Math.floor(value);
+      }
+
+      function loopTime(time) {
+        return ((time % LOOP_DURATION_MS) + LOOP_DURATION_MS) % LOOP_DURATION_MS;
+      }
+
+      function getMotionCandidates(samples = state.samples) {
+        if (motionSampleSource === samples) return motionCandidates;
+        motionSampleSource = samples;
+        motionCandidates = samples.filter((point) =>
+          !point.isArtBackground &&
+          point.maskAlpha > 0.02 &&
+          point.foregroundWeight >= 0.5 &&
+          motionSeed(point.gridX, point.gridY, 2.7) <= 0.52
+        );
+        return motionCandidates;
+      }
+
+      function renderAnimatedSource(time, motionMode, motionStrength, surface = null) {
+        const renderState = surface?.state || state;
+        const renderGlyphs = surface?.glyphs || glyphs;
+        const targetCanvas = surface?.animatedCanvas || animatedCanvas;
+        const targetCtx = surface?.animatedCtx || animatedCtx;
+        const baseCanvas = surface?.staticCanvas || staticCanvas;
+        const renderer = surface?.renderer || warpRenderer;
+        const now = loopTime(time);
+        const phase = now / LOOP_DURATION_MS * Math.PI * 2;
+        const glyphMotionEnabled = motionMode === 1 || motionMode === 4;
+        if (!glyphMotionEnabled || motionStrength <= 0 || !renderState.samples.length) return false;
+
+        targetCtx.setTransform(1, 0, 0, 1, 0, 0);
+        targetCtx.clearRect(0, 0, targetCanvas.width, targetCanvas.height);
+        targetCtx.drawImage(baseCanvas, 0, 0);
+
+        const { cellX, cellY } = getGridMetrics(renderState);
+        const strength = clamp(motionStrength / 100);
+        const isCharacterFlow = motionMode === 4;
+        const modeStrength = isCharacterFlow ? clamp(strength * 1.18) : strength;
+        const flowBreath = isCharacterFlow
+          ? 0.58 + (0.5 + 0.5 * Math.sin(phase)) * 0.42
+          : 1;
+        const eligibleDensity = isCharacterFlow
+          ? (0.20 + flowBreath * 0.32) * (0.68 + modeStrength * 0.32)
+          : 0.18 * (0.52 + strength * 0.48);
+        const glitchSteps = Math.round(LOOP_DURATION_MS / (420 - modeStrength * 120));
+        const glitchStepMs = LOOP_DURATION_MS / glitchSteps;
+
+        targetCtx.setTransform(renderState.dpr, 0, 0, renderState.dpr, 0, 0);
+        setGlyphFont(targetCtx, renderState);
+        for (const point of getMotionCandidates(renderState.samples)) {
+          const gate = motionSeed(point.gridX, point.gridY, 2.7);
+          const clusterX = Math.floor(point.gridX / 4);
+          const clusterY = Math.floor(point.gridY / 3);
+          const phaseOffset = isCharacterFlow
+            ? motionSeed(clusterX, clusterY, 40.2) * 0.96
+            : 0;
+          const localGlitchTime = now / glitchStepMs + phaseOffset;
+          const glitchTick = Math.floor(localGlitchTime) % glitchSteps;
+          const glitchProgress = localGlitchTime - Math.floor(localGlitchTime);
+          const transitionEnvelope = isCharacterFlow
+            ? Math.pow(Math.sin(Math.PI * glitchProgress), 0.72)
+            : 1;
+          if (gate > eligibleDensity) continue;
+
+          const randomPhase = phase +
+            motionSeed(point.gridX, point.gridY, 8.3) * Math.PI * 2;
+          const randomPulse = Math.pow(
+            Math.max(0, Math.sin(randomPhase)),
+            isCharacterFlow ? 4.2 : 6.2
+          );
+          const flowCurve = isCharacterFlow
+            ? Math.sin(point.gridY * 0.095 - phase) * 1.15
+            : 0;
+          const ribbonPhase = point.gridY * 0.36 + point.gridX * 0.06 +
+            flowCurve - phase * (isCharacterFlow ? 2 : 1);
+          const ribbonPulse = Math.pow(
+            Math.max(0, Math.sin(ribbonPhase)),
+            isCharacterFlow ? 3.0 : 6.0
+          ) * (0.58 + motionSeed(point.gridX, point.gridY, 20.4) * 0.42);
+          const clusterSeed = isCharacterFlow
+            ? motionSeed(
+                clusterX,
+                clusterY,
+                glitchTick + 48.2
+              )
+            : 0;
+          const clusterBurst = isCharacterFlow
+            ? Math.pow(clamp((clusterSeed - 0.56) / 0.44), 0.68) * flowBreath
+            : 0;
+          const rawPulse = Math.max(
+            randomPulse * (isCharacterFlow ? 0.64 * flowBreath : 0.78),
+            ribbonPulse * (isCharacterFlow ? flowBreath : 1),
+            clusterBurst
+          );
+          const pulse = isCharacterFlow
+            ? rawPulse * transitionEnvelope
+            : rawPulse;
+          if (pulse < (isCharacterFlow ? 0.035 : 0.22)) continue;
+
+          const glitchDirectionSeed = isCharacterFlow
+            ? motionSeed(point.gridX, point.gridY, glitchTick + 66.7)
+            : motionSeed(point.gridX, point.gridY, 14.1);
+          const direction = isCharacterFlow
+            ? (glitchDirectionSeed > 0.5 ? 1 : -1)
+            : (Math.sin(ribbonPhase) > 0.72 ? 1 : (glitchDirectionSeed > 0.5 ? 1 : -1));
+          const glitchDistanceSeed = isCharacterFlow
+            ? motionSeed(point.gridX, point.gridY, glitchTick + 81.4)
+            : 0;
+          const distance = isCharacterFlow
+            ? 1 + Math.floor(glitchDistanceSeed * (pulse > 0.70 ? 5 : 4))
+            : (pulse > 0.76 ? 2 : 1);
+          const liveGlyphIndex = Math.max(0, Math.min(
+            renderGlyphs.length - 1,
+            point.glyphIndex + direction * distance
+          ));
+          if (liveGlyphIndex === point.glyphIndex) continue;
+
+          // Only the active cell is covered. The confirmed static portrait and
+          // every inactive face glyph remain byte-for-byte the original render.
+          const transitionMix = isCharacterFlow
+            ? clamp(pulse / 0.78) * modeStrength
+            : 1;
+          const cellLeft = point.gridX * cellX;
+          const cellTop = point.gridY * cellY;
+          if (transparentMode) {
+            targetCtx.clearRect(cellLeft, cellTop, cellX, cellY);
+          } else {
+            targetCtx.fillStyle = '#000';
+            targetCtx.fillRect(cellLeft, cellTop, cellX, cellY);
+          }
+          const glow = pulse * (isCharacterFlow ? 0.22 : 0.13) * modeStrength;
+          if (transitionMix < 0.999) {
+            paintGlyph(targetCtx, point, point.glyphIndex, 0, 1 - transitionMix, renderState, renderGlyphs);
+          }
+          paintGlyph(targetCtx, point, liveGlyphIndex, glow, transitionMix, renderState, renderGlyphs);
+        }
+        targetCtx.setTransform(1, 0, 0, 1, 0, 0);
+        renderer?.updateAsciiTexture(targetCanvas);
+        if (!surface) animatedTextureActive = true;
+        return true;
+      }
+
+      function renderFrame(now = 0) {
+        state.framePending = false;
+        state.frameRequest = 0;
+        if (document.hidden || !state.isIntersecting || state.analyzing || exportInProgress) return;
+        const warpStrength = warpModes[state.warpIndex].strength;
+        const motionSuppressed = state.reducedMotion && !state.motionOverride;
+        const motionMode = motionSuppressed || !warpRenderer
+          ? 0
+          : motionModes[state.motionIndex].value;
+        const motionRequested = motionMode > 0 && state.motionStrength > 0;
+        let motionActive = state.staticReady && motionRequested;
+        let gpuEffectEnabled = warpStrength > 0 || motionActive;
+        let gpuActive = Boolean(warpRenderer && state.staticReady && gpuEffectEnabled);
+
+        // All continuous layers share one 24 FPS loop. Character conversion and
+        // the confirmed static portrait remain cached between control changes.
+        const frameInterval = 1000 / 24;
+        const elapsed = now - state.lastFrameTime;
+        if (motionActive && elapsed < frameInterval) {
+          requestRender();
+          return;
+        }
+        state.lastFrameTime = motionActive ? now - elapsed % frameInterval : now;
+
+        try {
+          rebuildSamples();
+          motionActive = state.staticReady && motionRequested;
+          gpuEffectEnabled = warpStrength > 0 || motionActive;
+          gpuActive = Boolean(warpRenderer && state.staticReady && gpuEffectEnabled);
+          const glyphSourceMotion = motionActive && (motionMode === 1 || motionMode === 4);
+          if (glyphSourceMotion) {
+            renderAnimatedSource(now, motionMode, state.motionStrength);
+          } else if (animatedTextureActive) {
+            warpRenderer?.updateAsciiTexture(staticCanvas);
+            animatedTextureActive = false;
+          }
+          ctx.setTransform(1, 0, 0, 1, 0, 0);
+          if (transparentMode) {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+          }
+          if (state.staticReady && !gpuActive) {
+            ctx.drawImage(staticCanvas, 0, 0);
+          } else if (!state.staticReady && !transparentMode) {
+            ctx.fillStyle = '#000';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+          }
+
+          if (gpuActive) {
+            warpCanvas.style.display = 'block';
+            warpCanvas.style.visibility = 'visible';
+            const { cellX, cellY } = getGridMetrics();
+            warpRenderer.render(
+              now,
+              warpStrength,
+              Math.min(state.dpr, 1.5),
+              cellX / cellY,
+              motionMode,
+              state.motionStrength,
+              state.colorModeIndex
+            );
+          } else {
+            warpCanvas.style.display = 'none';
+            warpCanvas.style.visibility = 'visible';
+          }
+
+          if (state.staticReady && state.processorFinishing) hideProcessor(state.processorFinishing);
+          if (motionActive && state.previewMode !== 'original') requestRender();
+        } catch (error) {
+          console.error('ASCII render failed:', error);
+          state.lastSampleKey = '';
+          state.staticReady = false;
+          warpCanvas.style.display = 'none';
+          dismissProcessor();
+          intro.classList.remove('is-hidden');
+          setStatus('statusRenderInterrupted');
+        }
+      }
+
+      function requestRender() {
+        if (state.framePending || document.hidden || !state.isIntersecting ||
+            state.analyzing || exportInProgress) return;
+        if (state.previewMode === 'original' && state.staticReady && !state.processorFinishing) return;
+        state.framePending = true;
+        state.frameRequest = requestAnimationFrame(renderFrame);
+      }
+
+      warpCanvas.addEventListener('webglcontextlost', (event) => {
+        event.preventDefault();
+        warpRenderer = null;
+        animatedTextureActive = false;
+        warpCanvas.style.display = 'none';
+        warpSelect.disabled = true;
+        motionSelect.disabled = true;
+        motionStrengthRange.disabled = true;
+        stopRenderLoop();
+        ctx.setTransform(1, 0, 0, 1, 0, 0);
+        if (state.staticReady) {
+          ctx.drawImage(staticCanvas, 0, 0);
+          setStatus('statusGpuFallback');
+        }
+      });
+      warpCanvas.addEventListener('webglcontextrestored', () => {
+        warpRenderer = createDisplacementRenderer(warpCanvas);
+        if (!warpRenderer) return;
+        warpRenderer.resize(canvas.width, canvas.height);
+        if (state.staticReady) warpRenderer.updateTextures(staticCanvas, heightCanvas);
+        warpSelect.disabled = false;
+        motionSelect.disabled = false;
+        motionStrengthRange.disabled = false;
+        requestRender();
+      });
+
+      function stopRenderLoop() {
+        if (state.frameRequest) cancelAnimationFrame(state.frameRequest);
+        state.frameRequest = 0;
+        state.framePending = false;
+      }
+
+      function preparePortraitImage(image) {
+        const width = image.naturalWidth || image.width;
+        const height = image.naturalHeight || image.height;
+        if (!width || !height) throw new Error('Empty image');
+        const scale = Math.min(1, 2048 / Math.max(width, height));
+        const prepared = document.createElement('canvas');
+        prepared.width = Math.max(1, Math.round(width * scale));
+        prepared.height = Math.max(1, Math.round(height * scale));
+        prepared.getContext('2d').drawImage(image, 0, 0, prepared.width, prepared.height);
+        image.close?.();
+        return prepared;
+      }
+
+      // Demos force Source field; the visitor's own photo gets their previous
+      // background choice back unless they picked one while viewing the demo.
+      function restoreBackgroundAfterDemo() {
+        if (state.backgroundBeforeDemo === null) return;
+        state.backgroundModeIndex = state.backgroundBeforeDemo;
+        state.backgroundBeforeDemo = null;
+        syncControls();
+      }
+
+      function acceptPortraitImage(image, { demo = false, demoId = null } = {}) {
+        const previousImage = state.image;
+        state.image = preparePortraitImage(image);
+        state.demoMode = demo;
+        state.demoId = demo ? demoId : null;
+        state.pendingDemoId = null;
+        state.imageRequestPending = false;
+        setPreviewMode('ascii');
+        if (demo) {
+          // This photo already has a quiet background. Keep it intact and avoid
+          // a network/model download for the one-click demonstration.
+          if (state.backgroundBeforeDemo === null) state.backgroundBeforeDemo = state.backgroundModeIndex;
+          state.backgroundModeIndex = 2;
+          syncControls();
+        } else {
+          restoreBackgroundAfterDemo();
+        }
+        previousImage?.close?.();
+        const scale = 1200 / Math.max(state.image.width, state.image.height);
+        state.artworkWidth = Math.max(1, Math.round(state.image.width * scale));
+        state.artworkHeight = Math.max(1, Math.round(state.image.height * scale));
+        state.frozenPreset = false;
+        state.segmentation = null;
+        state.lastSampleKey = '';
+        state.staticReady = false;
+        resize();
+        intro.classList.add('is-hidden');
+        setDemoGalleryOpen(false);
+        syncSourceControls();
+        notifyHost('ready');
+        setStatus('statusLoaded');
+        if (backgroundModes[state.backgroundModeIndex].mode !== 'original') {
+          void analyzePortrait(state.image);
+        } else {
+          requestRender();
+        }
+      }
+
+      function beginImageRequest() {
+        state.decodeToken += 1;
+        state.analysisToken += 1;
+        state.analyzing = false;
+        dismissProcessor();
+        clearTimeout(state.sessionSaveTimer);
+        state.imageRequestPending = true;
+        state.pendingDemoId = null;
+        setPreviewMode('ascii');
+        sourcePreviewCtx.clearRect(0, 0, sourcePreview.width, sourcePreview.height);
+        return state.decodeToken;
+      }
+
+      async function decodeFile(file, { persist = true } = {}) {
+        if (!file) return;
+        const decodeToken = beginImageRequest();
+        const storageEpoch = state.storageEpoch;
+        setStatus('statusReading');
+
+        try {
+          if (file.size > 40 * 1024 * 1024) throw new Error('Image exceeds the 40 MiB input limit.');
+          let image;
+          if ('createImageBitmap' in window) {
+            try {
+              image = await createImageBitmap(file, { imageOrientation: 'from-image' });
+            } catch (_) {
+              image = null;
+            }
+          }
+
+          if (!image) {
+            const url = URL.createObjectURL(file);
+            try {
+              image = await new Promise((resolve, reject) => {
+                const img = new Image();
+                img.onload = () => resolve(img);
+                img.onerror = () => reject(new Error('The browser could not decode this image.'));
+                img.src = url;
+              });
+            } finally {
+              URL.revokeObjectURL(url);
+            }
+          }
+
+          if (decodeToken !== state.decodeToken) {
+            image?.close?.();
+            return;
+          }
+
+          acceptPortraitImage(image);
+          if (persist) {
+            saveLastPortrait(file, storageEpoch, decodeToken).then(() => {
+              if (decodeToken === state.decodeToken) storageWarning.hidden = true;
+            }).catch((error) => {
+              console.warn('Local portrait persistence unavailable:', error);
+              if (decodeToken === state.decodeToken) storageWarning.hidden = false;
+            });
+          }
+        } catch (error) {
+          console.error('Image could not be read:', error);
+          if (decodeToken === state.decodeToken) {
+            state.imageRequestPending = false;
+            syncSourceControls();
+            requestRender();
+            setStatus('statusDecodeFailed');
+          }
+        }
+      }
+
+      function handleDrop(event) {
+        event.preventDefault();
+        dropTarget.classList.remove('is-over');
+        decodeFile(event.dataTransfer?.files?.[0]);
+      }
+
+      filePickers.forEach((picker) => {
+        picker.addEventListener('change', () => {
+          const file = picker.files?.[0];
+          picker.value = '';
+          void decodeFile(file);
+        });
+      });
+
+      demoButton.addEventListener('click', () => setDemoGalleryOpen(demoGallery.hidden));
+      demoSelect.addEventListener('change', () => {
+        if (demoSelect.value) void loadDemoPortrait(demoSelect.value);
+      });
+      originalViewButton.addEventListener('click', () => setPreviewMode('original'));
+      asciiViewButton.addEventListener('click', () => setPreviewMode('ascii'));
+
+      ['dragenter', 'dragover'].forEach((type) => {
+        document.addEventListener(type, (event) => {
+          event.preventDefault();
+          dropTarget.classList.add('is-over');
+        });
+      });
+      document.addEventListener('dragleave', () => dropTarget.classList.remove('is-over'));
+      document.addEventListener('drop', handleDrop);
+
+      gridRange.addEventListener('input', () => {
+        state.gridSize = Number(gridRange.value);
+        gridValue.value = state.gridSize.toFixed(1);
+        state.lastSampleKey = '';
+        state.staticReady = false;
+        requestRender();
+      });
+
+      levelsSelect.addEventListener('change', () => {
+        state.paletteIndex = Number(levelsSelect.value);
+        glyphs = palettes[state.paletteIndex].glyphs;
+        state.lastSampleKey = '';
+        state.staticReady = false;
+        levelLabel.textContent = t('levelLabel', { levels: glyphs.length });
+        requestRender();
+      });
+
+      colorSelect.addEventListener('change', () => {
+        state.colorModeIndex = Number(colorSelect.value);
+        state.lastSampleKey = '';
+        state.staticReady = false;
+        requestRender();
+      });
+
+      contrastRange.addEventListener('input', () => {
+        state.contrast = Number(contrastRange.value);
+        contrastValue.value = formatSigned(state.contrast);
+        state.lastSampleKey = '';
+        state.staticReady = false;
+        requestRender();
+      });
+
+      temperatureRange.addEventListener('input', () => {
+        state.temperature = Number(temperatureRange.value);
+        temperatureValue.value = formatSigned(state.temperature);
+        state.lastSampleKey = '';
+        state.staticReady = false;
+        requestRender();
+      });
+
+      tintRange.addEventListener('input', () => {
+        state.tint = Number(tintRange.value);
+        tintValue.value = formatSigned(state.tint);
+        state.lastSampleKey = '';
+        state.staticReady = false;
+        requestRender();
+      });
+
+      warpSelect.addEventListener('change', () => {
+        if (!warpRenderer) return;
+        state.warpIndex = Number(warpSelect.value);
+        requestRender();
+        scheduleSessionSave();
+      });
+
+      motionSelect.addEventListener('change', () => {
+        if (!warpRenderer) return;
+        state.motionIndex = Number(motionSelect.value);
+        if (state.reducedMotion && motionModes[state.motionIndex].value > 0) {
+          state.motionOverride = true;
+        }
+        requestRender();
+        scheduleSessionSave();
+      });
+
+      motionStrengthRange.addEventListener('input', () => {
+        state.motionStrength = Number(motionStrengthRange.value);
+        motionStrengthValue.value = String(state.motionStrength);
+        if (state.reducedMotion && state.motionStrength > 0) {
+          state.motionOverride = true;
+        }
+        requestRender();
+        scheduleSessionSave();
+      });
+
+      backgroundSelect.addEventListener('change', () => {
+        state.backgroundModeIndex = Number(backgroundSelect.value);
+        state.backgroundBeforeDemo = null;
+        state.lastSampleKey = '';
+        state.staticReady = false;
+        const backgroundMode = backgroundModes[state.backgroundModeIndex];
+        if (backgroundMode.mode !== 'original' &&
+            state.image && !state.segmentation && !state.analyzing) {
+          analyzePortrait(state.image);
+        }
+        requestRender();
+      });
+
+      languageSelect.addEventListener('change', () => {
+        applyLanguage(languageSelect.value);
+      });
+
+      function createVideoExportSnapshot({ transparentOutput = false, padToEven = true } = {}) {
+        if (!state.staticReady || state.analyzing) throw new Error('Portrait is not ready.');
+        const snapshotState = { ...state, samples: state.samples.map((point) => ({ ...point })) };
+        const snapshotGlyphs = glyphs;
+        const buffers = [];
+        let renderer = null;
+        const makeCanvas = (width = canvas.width, height = canvas.height) => {
+          const buffer = document.createElement('canvas');
+          buffer.width = width;
+          buffer.height = height;
+          buffers.push(buffer);
+          return buffer;
+        };
+        const dispose = () => {
+          renderer?.dispose();
+          renderer = null;
+          buffers.forEach((buffer) => { buffer.width = 1; buffer.height = 1; });
+          snapshotState.samples = [];
+          motionSampleSource = null;
+          motionCandidates = [];
+        };
+        try {
+          const base = makeCanvas();
+          base.getContext('2d').drawImage(staticCanvas, 0, 0);
+          const animation = makeCanvas();
+          const output = makeCanvas(canvas.width + (padToEven ? canvas.width % 2 : 0),
+            canvas.height + (padToEven ? canvas.height % 2 : 0));
+          const outputCtx = output.getContext('2d', { alpha: transparentOutput });
+          const gpuCanvas = makeCanvas();
+          const reduced = snapshotState.reducedMotion && !snapshotState.motionOverride;
+          const motionMode = reduced || !warpRenderer ? 0 : motionModes[snapshotState.motionIndex].value;
+          const motionStrength = snapshotState.motionStrength;
+          const warpStrength = warpRenderer ? warpModes[snapshotState.warpIndex].strength : 0;
+          const gpuNeeded = warpStrength > 0 || (motionMode > 0 && motionStrength > 0);
+          if (gpuNeeded) {
+            renderer = createDisplacementRenderer(gpuCanvas);
+            if (!renderer) throw new Error('Not enough graphics resources to export video.');
+            renderer.resize(base.width, base.height);
+            // Upload synchronously: later changes to the editor cannot alter these textures.
+            renderer.updateTextures(base, heightCanvas);
+          }
+          const surface = {
+            state: snapshotState, glyphs: snapshotGlyphs,
+            staticCanvas: base, animatedCanvas: animation,
+            animatedCtx: animation.getContext('2d'), renderer
+          };
+          return {
+            canvas: output,
+            renderFrame(time) {
+              if (gpuNeeded) {
+                renderAnimatedSource(time, motionMode, motionStrength, surface);
+                renderer.render(time, warpStrength, snapshotState.dpr, 1 / 1.4,
+                  motionMode, motionStrength, snapshotState.colorModeIndex);
+              }
+              if (transparentOutput) outputCtx.clearRect(0, 0, output.width, output.height);
+              else {
+                outputCtx.fillStyle = '#000';
+                outputCtx.fillRect(0, 0, output.width, output.height);
+              }
+              outputCtx.drawImage(gpuNeeded ? gpuCanvas : base, 0, 0);
+            },
+            dispose
+          };
+        } catch (error) {
+          dispose();
+          throw error;
+        }
+      }
+
+      function downloadBlob(blob, filename) {
+        const link = document.createElement('a');
+        const url = URL.createObjectURL(blob);
+        link.download = filename;
+        link.href = url;
+        link.click();
+        setTimeout(() => URL.revokeObjectURL(url), 2000);
+      }
+
+      async function exportPngStill() {
+        const epoch = state.storageEpoch;
+        const snapshot = createVideoExportSnapshot({ transparentOutput: transparentMode, padToEven: false });
+        try {
+          snapshot.renderFrame(state.lastFrameTime);
+          const exportCanvas = snapshot.canvas;
+          const blob = await new Promise((resolve, reject) => {
+            exportCanvas.toBlob((result) => {
+              if (result) resolve(result);
+              else reject(new Error('PNG encoding returned an empty result.'));
+            }, 'image/png');
+          });
+          if (epoch !== state.storageEpoch) return;
+          downloadBlob(blob, 'ascii-portrait.png');
+          setStatus('statusPngExported');
+        } finally { snapshot.dispose(); }
+      }
+
+      function getVideoExportFormat() {
+        return window.AsciiMotionExport?.getPreferredFormat() || null;
+      }
+
+      let videoExportController = null;
+
+      async function exportMotionVideo(duration = 6000) {
+        const epoch = state.storageEpoch;
+        if (!getVideoExportFormat()) {
+          setStatus('statusVideoUnsupported');
+          return;
+        }
+
+        let snapshot;
+        try {
+          snapshot = createVideoExportSnapshot();
+          setStatus('statusEncoding', { percent: 0 });
+          const output = await window.AsciiMotionExport.record({
+            canvas: snapshot.canvas,
+            renderFrame: snapshot.renderFrame,
+            durationMs: duration,
+            fps: 24,
+            signal: videoExportController?.signal,
+            onProgress: (progress) => setStatus('statusEncoding', {
+              percent: Math.min(99, Math.round(progress * 100))
+            })
+          });
+          if (epoch !== state.storageEpoch) return;
+          downloadBlob(output.blob, `ascii-portrait.${output.extension}`);
+          setStatus('statusVideoExported', { format: output.label });
+        } finally {
+          snapshot?.dispose?.();
+        }
+      }
+
+      function setExportBusy(isBusy) {
+        exportInProgress = isBusy;
+        const recordingVideo = isBusy && exportFormatSelect.value === 'video';
+        downloadButton.disabled = isBusy && !recordingVideo;
+        exportFormatSelect.disabled = isBusy;
+        downloadButton.textContent = t(recordingVideo ? 'cancelExport' : isBusy ? 'exporting' : 'exportAction');
+        window.StudioSelects?.sync();
+        if (!isBusy) requestRender();
+      }
+
+      downloadButton.addEventListener('click', async () => {
+        if (exportInProgress) {
+          videoExportController?.abort();
+          return;
+        }
+        if (!state.staticReady) {
+          setStatus('statusExportUnavailable');
+          return;
+        }
+        const video = exportFormatSelect.value === 'video';
+        const epoch = state.storageEpoch;
+        videoExportController = video ? new AbortController() : null;
+        setExportBusy(true);
+        try {
+          if (video) await exportMotionVideo();
+          else await exportPngStill();
+        } catch (error) {
+          if (epoch !== state.storageEpoch) return;
+          if (error.name === 'AbortError') {
+            setStatus('statusExportCancelled');
+          } else if (error.name === 'NotSupportedError') {
+            setStatus('statusVideoUnsupported');
+          } else if (error.name === 'TimeoutError') {
+            setStatus('statusExportTimeoutFailed');
+          } else if (error.name === 'EncodingError') {
+            setStatus('statusExportEncodingFailed');
+          } else {
+            console.error('ASCII portrait export failed:', error);
+            setStatus('statusExportFailed');
+          }
+        } finally {
+          videoExportController = null;
+          setExportBusy(false);
+        }
+      });
+
+      clearLocalDataButton.addEventListener('click', async () => {
+        try {
+          const clearing = clearLocalPortraitData();
+          const token = state.decodeToken;
+          await clearing;
+          if (token === state.decodeToken) setStatus('statusCleared');
+        } catch (error) {
+          console.warn('Local portrait data could not be cleared:', error);
+          setStatus('statusClearFailed');
+        }
+      });
+
+      document.addEventListener('visibilitychange', () => {
+        if (document.hidden) stopRenderLoop();
+        else requestRender();
+      });
+      const portraitObserver = 'IntersectionObserver' in window
+          ? new IntersectionObserver(([entry]) => {
+            state.isIntersecting = Boolean(entry?.isIntersecting);
+            if (state.isIntersecting) requestRender();
+            else stopRenderLoop();
+          }, { threshold: 0.01 })
+        : null;
+      portraitObserver?.observe(canvas);
+      const handleReducedMotionChange = (event) => {
+        state.reducedMotion = event.matches;
+        requestRender();
+      };
+      if (typeof reducedMotionQuery.addEventListener === 'function') {
+        reducedMotionQuery.addEventListener('change', handleReducedMotionChange);
+      } else {
+        reducedMotionQuery.addListener(handleReducedMotionChange);
+      }
+
+      window.addEventListener('resize', resize, { passive: true });
+      resize();
+      requestRender();
+
+      async function loadDemoPortrait(id = 'portrait') {
+        const demo = demoPortraits.find((candidate) => candidate.id === id);
+        if (!demo) return false;
+        return loadPortraitUrl(demo.source, { demo: true, demoId: demo.id });
+      }
+
+      async function loadPortraitUrl(source, { demo = false, demoId = null } = {}) {
+        const token = beginImageRequest();
+        state.pendingDemoId = demo ? demoId : null;
+        syncSourceControls();
+        if (demo) setStatus('statusLoadingDemo');
+        try {
+          const imageUrl = new URL(source, location.href);
+          if (!['https:', 'http:', 'file:'].includes(imageUrl.protocol)) throw new Error('Unsupported image URL');
+          const image = await withTimeout(new Promise((resolve, reject) => {
+            const candidate = new Image();
+            if (imageUrl.origin !== location.origin) candidate.crossOrigin = 'anonymous';
+            candidate.onload = () => resolve(candidate);
+            candidate.onerror = () => reject(new Error('Portrait URL could not load'));
+            candidate.src = imageUrl.href;
+          }), 20000);
+          if (token !== state.decodeToken) {
+            image.close?.();
+            return false;
+          }
+          acceptPortraitImage(image, { demo, demoId });
+          return true;
+        } catch (error) {
+          if (token !== state.decodeToken) return false;
+          state.imageRequestPending = false;
+          state.pendingDemoId = null;
+          syncSourceControls();
+          if (!state.image && !state.frozenPreset) intro.classList.remove('is-hidden');
+          requestRender();
+          setStatus(demo ? 'statusDemoFailed' : 'statusRequestedPortraitFailed');
+          return false;
+        }
+      }
+
+      async function readJsonResponse(response, maximumBytes = MAX_PRESET_BYTES) {
+        const declaredLength = Number(response.headers.get('content-length'));
+        if (Number.isFinite(declaredLength) && declaredLength > maximumBytes) {
+          throw new Error('ASCII portrait preset is larger than the allowed limit.');
+        }
+        if (!response.body?.getReader) {
+          const text = await response.text();
+          if (new Blob([text]).size > maximumBytes) throw new Error('ASCII portrait preset is too large.');
+          return JSON.parse(text);
+        }
+
+        const reader = response.body.getReader();
+        const chunks = [];
+        let totalBytes = 0;
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          totalBytes += value.byteLength;
+          if (totalBytes > maximumBytes) {
+            await reader.cancel();
+            throw new Error('ASCII portrait preset is too large.');
+          }
+          chunks.push(value);
+        }
+        const bytes = new Uint8Array(totalBytes);
+        let offset = 0;
+        for (const chunk of chunks) {
+          bytes.set(chunk, offset);
+          offset += chunk.byteLength;
+        }
+        return JSON.parse(new TextDecoder().decode(bytes));
+      }
+
+      async function loadAssetPresetUrl(presetUrl) {
+        const token = state.decodeToken;
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 20000);
+        try {
+          const response = await fetch(presetUrl, { cache: 'no-store', signal: controller.signal });
+          if (!response.ok) return false;
+          const preset = await readJsonResponse(response);
+          return token === state.decodeToken && applyAssetPreset(preset);
+        } catch (error) {
+          console.warn(`Could not load ASCII portrait preset from ${presetUrl}:`, error);
+          return false;
+        } finally {
+          clearTimeout(timeout);
+        }
+      }
+
+      async function restoreInitialPortrait() {
+        const initialToken = state.decodeToken;
+        setStatus('statusRestoring');
+        const requestedPreset = embedParams?.get('preset');
+        const embeddedPortrait = embedParams?.get('portrait');
+        if (embedMode && requestedPreset) {
+          if (await loadAssetPresetUrl(requestedPreset)) return;
+          intro.classList.remove('is-hidden');
+          setStatus('statusPresetFailed');
+          return;
+        }
+        if (embeddedPortrait) {
+          loadPortraitUrl(embeddedPortrait);
+          return;
+        }
+        if (embedMode) {
+          setStatus('statusEmbedSourceFailed');
+          return;
+        }
+        try {
+          const [savedPortrait, settings] = await Promise.all([loadLastPortrait(), loadSessionSettings()]);
+          if (initialToken !== state.decodeToken) return;
+          if (savedPortrait?.blob) {
+            restoreSettings(settings);
+            await decodeFile(savedPortrait.blob, { persist: false });
+            return;
+          }
+        } catch (error) {
+          console.warn('No saved portrait could be restored:', error);
+        }
+        if (initialToken === state.decodeToken) setStatus('statusChoosePortrait');
+      }
+
+      window.StudioSelects?.mount();
+      applyLanguage(getInitialLanguage(), { persist: false });
+      restoreInitialPortrait();
+    })();
+  </script>
+</body>
+</html>
